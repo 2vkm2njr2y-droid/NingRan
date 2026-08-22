@@ -65,7 +65,7 @@ This repository does not include the icons and automation scripts used to produc
 
 ## License
 
-No open-source license is currently provided. Except where permitted by applicable law, public access to the source code does not grant permission to copy, modify, redistribute, or use it commercially.
+This project is licensed under the [MIT License](LICENSE). You may use, copy, modify, publish, distribute, and use the project commercially, provided that the original copyright notice and license text are retained. The software is provided as is, without warranty.
 
 ## Safety Notice
 

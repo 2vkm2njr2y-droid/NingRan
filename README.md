@@ -65,7 +65,7 @@ dotnet run --project src/NingRan.Windows/NingRan.Windows.csproj -c Release
 
 ## 许可证
 
-本仓库目前未附带开源许可证。除法律明确允许的情况外，公开查看源码不代表获得复制、修改、再发布或商业使用的授权。
+本项目采用 [MIT 许可证](LICENSE)。您可以使用、复制、修改、发布和商业使用本项目，但必须保留原始版权声明和许可证内容。本软件按现状提供，不附带任何保证。
 
 ## 安全提醒
 
