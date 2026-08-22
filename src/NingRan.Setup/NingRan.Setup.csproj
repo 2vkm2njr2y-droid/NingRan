@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\NingRan.Setup.Core\NingRan.Setup.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>..\NingRan.Windows\Assets\AppIcon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>NingRanSetup</AssemblyName>
+    <RootNamespace>NingRan.Setup.Windows</RootNamespace>
+    <Version>6.0.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="..\NingRan.Windows\Assets\AppIcon.png" Link="Assets\AppIcon.png" />
+    <Resource Include="..\NingRan.Windows\Assets\AppIcon.ico" Link="Assets\AppIcon.ico" />
+    <EmbeddedResource Include="$(InstallerPayload)"
+                      LogicalName="NingRan.Setup.Payload.zip"
+                      Condition="'$(InstallerPayload)' != '' And Exists('$(InstallerPayload)')" />
+  </ItemGroup>
+
+</Project>

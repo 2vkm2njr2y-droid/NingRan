@@ -1,0 +1,32 @@
+<Window x:Class="NingRan.Windows.PhysicalDevicesDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="物理设备管理" Width="860" Height="590" MinWidth="760" MinHeight="500"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock Text="物理设备管理" FontSize="21" FontWeight="Bold" />
+        <TextBlock Grid.Row="1" Margin="0,7,0,15" TextWrapping="Wrap" Foreground="#60726B"
+                   Text="登记后可把设备加入新的物理设备加密文件。普通移动存储可被有能力的人复制，因此保护强度低于 FIDO2 安全密钥。完整设备编号不会显示。" />
+        <ListBox x:Name="DeviceList" Grid.Row="2" DisplayMemberPath="DisplayText"
+                 BorderBrush="#C9DDD5" BorderThickness="1" Padding="5" />
+        <Grid Grid.Row="3" Margin="0,15,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <WrapPanel>
+                <Button Content="登记 U 盘/移动硬盘" Click="AddStorage_Click" Margin="0,0,8,0" />
+                <Button Content="登记 FIDO2 安全密钥" Click="AddFido_Click" Margin="0,0,8,0" />
+                <Button Content="重命名" Click="Rename_Click" Margin="0,0,8,0" />
+                <Button Content="从清单移除" Click="Forget_Click" />
+            </WrapPanel>
+            <Button Grid.Column="1" Content="完成" IsCancel="True" MinWidth="88" />
+        </Grid>
+    </Grid>
+</Window>
