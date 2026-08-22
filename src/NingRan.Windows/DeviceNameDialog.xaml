@@ -1,0 +1,24 @@
+<Window x:Class="NingRan.Windows.DeviceNameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设备名称" Width="430" Height="210" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock Text="给这台设备起一个容易辨认的名称" FontSize="16" FontWeight="SemiBold" />
+        <TextBlock Grid.Row="1" Text="例如：老大的随身 U 盘、办公室备用密钥" Margin="0,7,0,10"
+                   Foreground="#60726B" />
+        <TextBox x:Name="NameInput" Grid.Row="2" MaxLength="50" MinHeight="36" />
+        <TextBlock x:Name="ErrorText" Grid.Row="3" Foreground="Firebrick" Margin="0,7,0,0" />
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" MinWidth="82" Margin="0,0,8,0" />
+            <Button Content="确定" IsDefault="True" MinWidth="82" Click="Confirm_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

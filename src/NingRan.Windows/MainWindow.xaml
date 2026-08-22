@@ -1,0 +1,345 @@
+<Window x:Class="NingRan.Windows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="凝然加密"
+        Width="1420" Height="920" MinWidth="1000" MinHeight="640"
+        WindowStyle="None" ResizeMode="CanResize" AllowsTransparency="True"
+        Background="Transparent" WindowStartupLocation="CenterScreen"
+        AllowDrop="True" Drop="Window_Drop" DragOver="Window_DragOver"
+        Closing="Window_Closing" StateChanged="Window_StateChanged">
+    <Window.Resources>
+        <Style x:Key="TitleButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="2,0,0,0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#E7F1ED" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CloseTitleButton" TargetType="Button" BasedOn="{StaticResource TitleButton}">
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#D94A4A" />
+                    <Setter Property="Foreground" Value="White" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="WindowFrame" Margin="10" CornerRadius="20" Background="{StaticResource PageBrush}"
+            BorderBrush="#C9DDD5" BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="24" ShadowDepth="5" Opacity="0.20" Color="#17352C" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="66" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="凝" Width="43" Margin="24,0,0,0" FontSize="28" FontWeight="Bold"
+                           Foreground="{StaticResource AccentBrush}" TextAlignment="Center" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" Margin="11,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="凝然加密" FontSize="21" FontWeight="Bold" />
+                    <TextBlock Text="您的文件，只属于您" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                </StackPanel>
+                <Border Grid.Column="2" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
+                        Margin="0,0,14,0" VerticalAlignment="Center">
+                    <TextBlock Text="6.0.0" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
+                </Border>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
+                    <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="最小化" />
+                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleButton}" Content="&#xE922;"
+                            Click="MaximizeButton_Click" ToolTip="最大化" />
+                    <Button Style="{StaticResource CloseTitleButton}" Content="&#xE8BB;" Click="CloseButton_Click" ToolTip="关闭" />
+                </StackPanel>
+            </Grid>
+
+            <Grid x:Name="MainContent" Grid.Row="1" Margin="26,4,26,25">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3*" />
+                    <ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="2*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="17"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="22">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="100" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="选择需要保护或还原的内容" FontSize="17" FontWeight="SemiBold" />
+                            <TextBlock Text="支持单个文件或整个文件夹，大于 10 GB 也可以正常处理。"
+                                       Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0" FontSize="12" />
+                        </StackPanel>
+                        <Border Grid.Row="1" Margin="0,15,0,11" CornerRadius="12" Background="#EDF7F3"
+                                BorderBrush="#A8D1C3" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="⇩" FontSize="25" Foreground="{StaticResource PrimaryBrush}" HorizontalAlignment="Center" />
+                                <TextBlock Text="把文件或文件夹拖到这里" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                <TextBlock Text="也可以点击下方按钮选择" Foreground="{StaticResource MutedBrush}"
+                                           FontSize="11" Margin="0,2,0,0" HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <Grid Grid.Row="2" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Content="选择文件" Click="PickFile_Click" Margin="0,0,8,0" />
+                            <Button Grid.Column="1" Content="选择文件夹" Click="PickFolder_Click" />
+                            <TextBlock x:Name="SelectedPathText" Grid.Column="2" Text="尚未选择"
+                                       TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedBrush}"
+                                       VerticalAlignment="Center" Margin="13,0,0,0"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+                        </Grid>
+                        <Border Grid.Row="3" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                            <TreeView x:Name="FileTree" BorderThickness="0" Background="Transparent" Padding="7" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="17"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="22">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="操作设置" FontSize="17" FontWeight="SemiBold" />
+                        <Border Grid.Row="1" Background="#EDF4F1" CornerRadius="11" Padding="4" Margin="0,13,0,13">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <RadioButton x:Name="EncryptRadio" GroupName="Action" IsChecked="True"
+                                             Checked="ActionChanged" HorizontalContentAlignment="Center" Margin="0">
+                                    <TextBlock Text="加密" FontWeight="SemiBold" Padding="0,7" />
+                                </RadioButton>
+                                <RadioButton x:Name="DecryptRadio" Grid.Column="1" GroupName="Action"
+                                             Checked="ActionChanged" HorizontalContentAlignment="Center" Margin="0">
+                                    <TextBlock Text="解密" FontWeight="SemiBold" Padding="0,7" />
+                                </RadioButton>
+                            </Grid>
+                        </Border>
+
+                        <Grid x:Name="SettingsSwapHost" Grid.Row="2">
+                            <StackPanel x:Name="EncryptSettingsPanel">
+                                <TextBlock Text="保护模式" FontWeight="SemiBold" Margin="0,0,0,7" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Background="#F5F9F7" CornerRadius="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10,8">
+                                        <RadioButton x:Name="StandardRadio" GroupName="Mode" IsChecked="True" Checked="ModeChanged" Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="普通模式" FontWeight="SemiBold" />
+                                                <TextBlock Text="只使用密码" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </Border>
+                                    <Border Grid.Column="2" Background="#F5F9F7" CornerRadius="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10,8">
+                                        <RadioButton x:Name="AdvancedRadio" GroupName="Mode" Checked="ModeChanged" Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="高级模式" FontWeight="SemiBold" />
+                                                <TextBlock Text="密码＋密钥" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </Border>
+                                    <Border Grid.Column="4" Background="#F5F9F7" CornerRadius="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10,8">
+                                        <RadioButton x:Name="PhysicalRadio" GroupName="Mode" Checked="ModeChanged" Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="物理设备" FontWeight="SemiBold" />
+                                                <TextBlock Text="密码＋设备" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </Border>
+                                </Grid>
+
+                                <Grid Margin="0,13,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="密码" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <PasswordBox x:Name="EncryptPasswordInput" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="再次输入" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                        <PasswordBox x:Name="ConfirmPasswordInput" />
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="建议使用至少 16 个字符的口令短语；较弱密码会提示，但可自行决定继续。" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+
+                                <StackPanel x:Name="EncryptAdvancedKeyPanel" Visibility="Collapsed" Margin="0,12,0,0">
+                                    <TextBlock Text="密匙文件（任意普通文件或 .nrkey）" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="EncryptKeyFilePathInput" IsReadOnly="True" />
+                                        <Button Grid.Column="1" Content="选择" Click="PickEncryptKeyFile_Click" Margin="7,0,0,0" />
+                                    </Grid>
+                                    <Button Content="生成新版密钥文件" Click="CreateKey_Click"
+                                            HorizontalAlignment="Left" Margin="0,7,0,0" />
+                                </StackPanel>
+
+                                <StackPanel x:Name="EncryptPhysicalDevicePanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="授权物理设备（可多选）" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Content="管理设备" Click="ManagePhysicalDevices_Click" Padding="10,5" />
+                                    </Grid>
+                                    <ListBox x:Name="EncryptPhysicalDeviceList" SelectionMode="Multiple"
+                                             DisplayMemberPath="DisplayText" MinHeight="44" MaxHeight="68" />
+                                    <TextBlock Text="加密时需逐一出示所有所选设备；解密时插入其中任意一个并输入密码即可。全部设备丢失后无法恢复。"
+                                               TextWrapping="Wrap" FontSize="11" Foreground="Firebrick" Margin="0,3,0,0" />
+                                </StackPanel>
+
+                                <TextBlock Text="大小隐藏" FontWeight="SemiBold" Margin="0,10,0,6" />
+                                <ComboBox x:Name="SizePaddingCombo" SelectedIndex="0">
+                                    <ComboBoxItem Content="不隐藏大小" />
+                                    <ComboBoxItem Content="粗略补齐（最多额外约 64 MB）" />
+                                    <ComboBoxItem Content="固定补到约 100 MB" />
+                                    <ComboBoxItem Content="固定补到约 1 GB" />
+                                    <ComboBoxItem Content="固定补到约 10 GB" />
+                                </ComboBox>
+                                <TextBlock Text="开始前会显示预计额外占用空间；固定容量小于原内容时不会缩小文件。"
+                                           TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+
+                                <CheckBox x:Name="SignIdentityCheck" Margin="0,10,0,0" IsChecked="True" IsEnabled="False"
+                                          Content="证明发送者身份（安全要求，必须启用）"
+                                          Checked="SigningChanged" Unchecked="SigningChanged" />
+                                <StackPanel x:Name="EncryptIdentityPanel" Visibility="Collapsed" Margin="0,7,0,0">
+                                    <TextBlock Text="发送者身份" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="SigningIdentityCombo" DisplayMemberPath="DisplayText" MinHeight="36" />
+                                        <WrapPanel Grid.Column="1" Margin="7,0,0,0">
+                                            <Button Content="创建身份" Click="CreateIdentity_Click" Margin="0,0,7,0" Padding="10,5" />
+                                            <Button Content="导入备份" Click="ImportIdentity_Click" Margin="0,0,7,0" Padding="10,5" />
+                                            <Button Content="导出私密备份" Click="ExportPrivateIdentityBackup_Click" Margin="0,0,7,0" Padding="10,5" />
+                                            <Button Content="导出公开身份" Click="ExportPublicIdentity_Click" Margin="0,0,7,0" Padding="10,5" />
+                                            <Button Content="删除身份" Click="DeleteIdentity_Click" Padding="10,5" />
+                                        </WrapPanel>
+                                    </Grid>
+                                    <TextBlock Text="身份密码" FontWeight="SemiBold" Margin="0,8,0,6" />
+                                    <PasswordBox x:Name="SigningIdentityPasswordInput" />
+                                    <TextBlock Text="这是创建身份时设置的独立密码。" FontSize="11"
+                                               Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel x:Name="DecryptSettingsPanel" Visibility="Collapsed">
+                                <Border Background="#EDF7F3" CornerRadius="10" Padding="12,10" Margin="0,0,0,13">
+                                    <TextBlock x:Name="DetectedModeText" Text="选择加密文件后只显示必要的公开信息。"
+                                               Foreground="{StaticResource PrimaryBrush}" TextWrapping="Wrap" />
+                                </Border>
+                                <TextBlock Text="密码" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                <PasswordBox x:Name="DecryptPasswordInput" />
+                                <TextBlock Text="请输入加密时使用的密码。" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+
+                                <StackPanel x:Name="DecryptKeyPanel" Visibility="Collapsed" Margin="0,15,0,0">
+                                    <TextBlock Text="密匙文件（仅高级模式需要；不确定时可暂不选择）" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="DecryptKeyFilePathInput" IsReadOnly="True" />
+                                        <Button Grid.Column="1" Content="选择" Click="PickDecryptKeyFile_Click" Margin="7,0,0,0" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel x:Name="DecryptPhysicalDevicePanel" Visibility="Collapsed" Margin="0,15,0,0">
+                                    <TextBlock Text="物理设备" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <TextBlock x:Name="DecryptPhysicalDeviceText" TextWrapping="Wrap"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                    <TextBlock Text="如使用了物理设备保护，请插入获授权设备。FIDO2 密钥还需按 Windows 提示触摸或验证。"
+                                               TextWrapping="Wrap" FontSize="11" Foreground="Firebrick" Margin="0,6,0,0" />
+                                </StackPanel>
+
+                                <StackPanel x:Name="DecryptSenderPanel" Visibility="Collapsed" Margin="0,15,0,0">
+                                    <TextBlock Text="可信发送者联系人" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="SenderPublicIdentityPathInput" IsReadOnly="True" />
+                                        <Button Grid.Column="1" Content="导入公开身份" Click="PickSenderPublicIdentity_Click" Margin="7,0,0,0" />
+                                        <Button Grid.Column="2" Content="管理" Click="ManageTrustedContacts_Click" Margin="7,0,0,0" />
+                                    </Grid>
+                                    <TextBlock x:Name="SenderIdentityStatusText" Text="解密时会自动核验本机可信联系人。"
+                                               TextWrapping="Wrap" FontSize="11"
+                                               Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel Grid.Row="3" Margin="0,13,0,0">
+                            <TextBlock Text="保存位置" FontWeight="SemiBold" Margin="0,0,0,6" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="DestinationInput" IsReadOnly="True" />
+                                <Button Grid.Column="1" Content="选择" Click="PickDestination_Click" Margin="7,0,0,0" />
+                            </Grid>
+                            <TextBlock Text="默认保存在原位置；同名内容会自动改名保留。" FontSize="11"
+                                       Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+                        </StackPanel>
+
+                        <Button x:Name="RunButton" Grid.Row="4" Content="开始加密"
+                                Style="{StaticResource PrimaryButton}" Click="Run_Click"
+                                Margin="0,15,0,0" MinHeight="44" FontSize="15" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

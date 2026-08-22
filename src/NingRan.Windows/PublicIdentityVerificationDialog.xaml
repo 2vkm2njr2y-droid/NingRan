@@ -1,0 +1,40 @@
+<Window x:Class="NingRan.Windows.PublicIdentityVerificationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
+        Title="核对公开身份" Width="500" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <Border Padding="26">
+        <StackPanel>
+            <TextBlock Text="输入发送者安全码" FontSize="19" FontWeight="Bold" />
+            <TextBlock Margin="0,7,0,18" TextWrapping="Wrap"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="程序不会显示正确答案。请通过电话、当面或其他独立可信方式，向发送者取得安全码。" />
+
+            <Border Background="#EDF7F3" CornerRadius="9" Padding="12,10" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="公开身份名称" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                    <TextBlock x:Name="IdentityNameText" Margin="0,3,0,0" FontWeight="SemiBold" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="7 位安全码" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBox x:Name="VerificationCodeInput" MaxLength="7" FontFamily="Consolas"
+                     FontSize="22" HorizontalContentAlignment="Center"
+                     automation:AutomationProperties.Name="发送者安全码" />
+            <TextBlock Text="只能输入英文字母，严格区分大写和小写。"
+                       FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+            <TextBlock x:Name="ErrorText" Text="安全码不匹配，请向发送者重新核对后再试。"
+                       Visibility="Collapsed" Foreground="#B42318" Margin="0,9,0,0"
+                       TextWrapping="Wrap" />
+
+            <TextBlock Margin="0,17,0,0" TextWrapping="Wrap"
+                       Text="点击“核对并信任”表示您明确同意把该身份加入可信联系人。" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+                <Button Content="取消" Click="Cancel_Click" Margin="0,0,8,0" />
+                <Button Content="核对并信任" Style="{StaticResource PrimaryButton}" Click="Confirm_Click" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
