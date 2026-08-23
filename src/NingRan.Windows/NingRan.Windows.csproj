@@ -2,10 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NingRan.Core\NingRan.Core.csproj" />
+    <ProjectReference Include="..\NingRan.StrictMonitor\NingRan.StrictMonitor.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NingRan.MediaPlayer\NingRan.MediaPlayer.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -18,7 +21,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>NingRan</AssemblyName>
     <RootNamespace>NingRan.Windows</RootNamespace>
-    <Version>6.1.0</Version>
+    <Version>6.1.10</Version>
+    <AssemblyVersion>6.1.10.0</AssemblyVersion>
+    <FileVersion>6.1.10.0</FileVersion>
+    <InformationalVersion>6.1.10</InformationalVersion>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
@@ -32,5 +40,18 @@
     <Content Include="Assets\IdentityBackupIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets\PublicIdentityIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="CopyStrictProtectionMonitor" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <StrictMonitorFiles Include="$(MSBuildProjectDirectory)\..\NingRan.StrictMonitor\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\NingRan.StrictMonitor.*" />
+      <MediaPlayerFiles Include="$(MSBuildProjectDirectory)\..\NingRan.MediaPlayer\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\NingRan.MediaPlayer.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StrictMonitorFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(MediaPlayerFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(StrictMonitorFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != ''" />
+    <Copy SourceFiles="@(MediaPlayerFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != ''" />
+  </Target>
 
 </Project>

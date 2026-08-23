@@ -7,7 +7,7 @@ public static class SetupProduct
 {
     public const string Id = "NingRan.Encryption";
     public const string Name = "凝然加密";
-    public const string Version = "6.1.0";
+    public const string Version = "6.1.10";
     public const string MainExecutableName = "NingRan.exe";
     public const string UninstallerName = "卸载凝然加密.exe";
     public const string StateFileName = "install-state.json";

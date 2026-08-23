@@ -10,7 +10,9 @@ namespace NingRan.Core.Internal;
 /// </summary>
 internal static class IndexedPayloadContainer
 {
-    internal const int BlockSize = 1024 * 1024;
+    // 保持与 6.1.2 新建归档一致的认证分段大小，确保本次正在测试的媒体文件可继续打开。
+    // 连续播放的流畅性由查看器的后台预读保证，不通过改变既有归档布局实现。
+    internal const int BlockSize = 4 * 1024 * 1024;
     private const int TagSize = CryptoSizes.Tag;
     private const long RecordSize = BlockSize + TagSize;
     private const int PrefixSize = 32;
@@ -19,8 +21,8 @@ internal static class IndexedPayloadContainer
     private const int MaximumEntries = 20_000;
     private const long MaximumTotalNameBytes = 8L * 1024 * 1024;
     private const int SenderSignatureSize = 64;
-    private static ReadOnlySpan<byte> PrefixMagic => "NRIDX005"u8;
-    private static ReadOnlySpan<byte> IndexMagic => "NRPAY005"u8;
+    private static ReadOnlySpan<byte> PrefixMagic => "NRIDX006"u8;
+    private static ReadOnlySpan<byte> IndexMagic => "NRPAY006"u8;
 
     public static async Task<IndexedPayload> WriteAsync(
         Stream output,

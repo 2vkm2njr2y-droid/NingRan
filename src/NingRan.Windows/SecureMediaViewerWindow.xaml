@@ -1,68 +1,72 @@
 <Window x:Class="NingRan.Windows.SecureMediaViewerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="凝然安全媒体查看" Icon="Assets/AppIcon.ico"
         Width="1220" Height="820" MinWidth="900" MinHeight="580"
         Background="{StaticResource PageBrush}" WindowStartupLocation="CenterOwner"
-        Loaded="Window_Loaded" Closing="Window_Closing">
-    <Grid Margin="22">
+        Loaded="Window_Loaded" Closing="Window_Closing" PreviewMouseMove="Viewer_PreviewMouseMove">
+    <Grid x:Name="ViewerRoot" Margin="22">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <Grid>
+        <Grid x:Name="ViewerHeader" Height="62" Background="{StaticResource CardBrush}">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel>
-                <TextBlock x:Name="TitleText" Text="安全媒体查看" FontSize="21" FontWeight="Bold" />
-                <TextBlock x:Name="SubtitleText" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,4,0,0" />
+            <TextBlock Text="⌂" Foreground="{StaticResource PrimaryBrush}" FontSize="25" VerticalAlignment="Center" Margin="22,0,17,0" />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="TitleText" Text="凝然加密 · 安全媒体播放器" Foreground="{StaticResource TextBrush}" FontSize="17" FontWeight="SemiBold" />
+                <TextBlock x:Name="SubtitleText" Text="不保存明文，文件只在内存中按需读取" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
             </StackPanel>
-            <Border Grid.Column="1" Background="#E3F2EC" CornerRadius="10" Padding="11,6" VerticalAlignment="Center">
+            <Border Grid.Column="2" Background="#E3F2EC" CornerRadius="10" Padding="11,6" Margin="0,0,22,0" VerticalAlignment="Center">
                 <TextBlock Text="不保存明文" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
             </Border>
         </Grid>
 
-        <Grid Grid.Row="1" Margin="0,18,0,0">
+        <Grid x:Name="ViewerBody" Grid.Row="1" Margin="0,18,0,0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="250" />
+                <ColumnDefinition Width="280" />
                 <ColumnDefinition Width="16" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="14">
+            <Border x:Name="PlaylistPanel" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="16">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="当前文件夹" FontWeight="SemiBold" FontSize="15" />
-                    <ComboBox x:Name="TypeFilterCombo" Grid.Row="1" Margin="0,10,0,10" SelectionChanged="TypeFilterCombo_SelectionChanged">
+                    <TextBlock Text="文件列表" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" FontSize="15" />
+                    <ComboBox x:Name="TypeFilterCombo" Grid.Row="1" Margin="0,10,0,10" SelectionChanged="TypeFilterCombo_SelectionChanged"
+                              Foreground="{StaticResource TextBrush}" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrush}">
                         <ComboBoxItem Content="全部媒体" Tag="all" IsSelected="True" />
                         <ComboBoxItem Content="图片" Tag="image" />
                         <ComboBoxItem Content="视频" Tag="video" />
                         <ComboBoxItem Content="音频" Tag="audio" />
                         <ComboBoxItem Content="文本" Tag="text" />
                     </ComboBox>
-                    <ListBox x:Name="Playlist" Grid.Row="2" DisplayMemberPath="Name" SelectionChanged="Playlist_SelectionChanged" />
+                    <ListBox x:Name="Playlist" Grid.Row="2" DisplayMemberPath="Name" SelectionChanged="Playlist_SelectionChanged"
+                             Foreground="{StaticResource TextBrush}" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" />
                 </Grid>
             </Border>
 
-            <Border Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="18">
+            <Border x:Name="MediaPanel" Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="18">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="0" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="0" />
                     </Grid.RowDefinitions>
-                    <Grid>
+                    <Grid Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="CurrentFileText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                        <TextBlock x:Name="MediaHeaderFileText" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                         <StackPanel x:Name="PlaybackRulePanel" Grid.Column="1" Orientation="Horizontal" Visibility="Collapsed">
                             <TextBlock Text="播放结束后" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,7,0" />
                             <ComboBox x:Name="PlaybackRuleCombo" Width="132" SelectedIndex="0">
@@ -74,7 +78,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <Grid Grid.Row="1" Margin="0,12,0,12">
+                    <Grid Grid.Row="1" Margin="0">
                         <Border x:Name="EmptyView" Background="#F5F9F7" CornerRadius="12" Padding="20">
                             <TextBlock x:Name="EmptyText" Text="请选择左侧文件" Foreground="{StaticResource MutedBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -92,7 +96,150 @@
                         <TextBox x:Name="TextView" Visibility="Collapsed" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="14"
                                  Background="#F8FBF9" BorderThickness="0" Padding="14" />
-                        <wv2:WebView2 x:Name="MediaBrowser" Visibility="Collapsed" />
+                        <Grid x:Name="NativeMediaHost" Visibility="Collapsed" Background="#090B0A" ClipToBounds="True"
+                              Focusable="True" SizeChanged="NativeMediaHost_SizeChanged" PreviewKeyDown="NativeMediaHost_PreviewKeyDown"
+                              MouseMove="NativeMediaHost_MouseMove">
+                            <Grid x:Name="NativeMediaPresentation" Background="#090B0A"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <vlc:VideoView x:Name="NativeMediaView" Loaded="NativeMediaView_Loaded" MouseMove="NativeMediaView_MouseMove">
+                                <Grid x:Name="NativeMediaOverlay" Background="Transparent"
+                                      MouseMove="NativeMediaOverlay_MouseMove"
+                                      MouseLeftButtonDown="NativeMediaOverlay_MouseLeftButtonDown">
+                                <TextBlock x:Name="NativeMediaHint" Text="← / → 调整播放进度　双击画面全屏" Visibility="Collapsed"
+                                           Foreground="#B6C9BF" FontSize="13" Opacity="0.76"
+                                           HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,15,0,0" IsHitTestVisible="False" />
+                                <Border x:Name="NativePreviewPopup" Visibility="Collapsed" Background="#E8121816" CornerRadius="8"
+                                        Padding="5" Width="230" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="18,0,0,108"
+                                        IsHitTestVisible="False">
+                                    <StackPanel>
+                                        <Grid Width="220" Height="124" Background="#101916">
+                                            <vlc:VideoView x:Name="NativePreviewVideoView" Visibility="Collapsed"
+                                                           Loaded="NativePreviewVideoView_Loaded" />
+                                            <Border x:Name="NativePreviewLoadingPanel" Background="#C913211D">
+                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <Ellipse Width="22" Height="22" Stroke="#64E0BD" StrokeThickness="2.5" StrokeDashArray="2,2"
+                                                             HorizontalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                                                        <Ellipse.RenderTransform>
+                                                            <RotateTransform x:Name="NativePreviewLoadingSpinner" />
+                                                        </Ellipse.RenderTransform>
+                                                    </Ellipse>
+                                                    <TextBlock x:Name="NativePreviewLoadingText" Text="正在生成预览…" Foreground="#E8F4EE"
+                                                               FontSize="11" Margin="0,7,0,0" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                        <TextBlock x:Name="NativePreviewTime" Foreground="White" FontSize="12" TextAlignment="Center" Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </Border>
+                                <Border x:Name="NativeMediaControlBar" Background="#F017352C" CornerRadius="0" Padding="20,8,20,9"
+                                        HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Margin="0">
+                                    <Border.Resources>
+                                        <Style x:Key="CompactMediaButton" TargetType="{x:Type Button}">
+                                            <Setter Property="MinHeight" Value="0" />
+                                            <Setter Property="MinWidth" Value="0" />
+                                            <Setter Property="Padding" Value="7,5" />
+                                            <Setter Property="Margin" Value="1,0" />
+                                            <Setter Property="Background" Value="Transparent" />
+                                            <Setter Property="BorderBrush" Value="Transparent" />
+                                            <Setter Property="BorderThickness" Value="0" />
+                                            <Setter Property="Foreground" Value="#E8F4EE" />
+                                            <Setter Property="FontSize" Value="13" />
+                                            <Setter Property="Cursor" Value="Hand" />
+                                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="{x:Type Button}">
+                                                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}"
+                                                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                                                CornerRadius="7" Padding="{TemplateBinding Padding}">
+                                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                              RecognizesAccessKey="True" />
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="ButtonSurface" Property="Background" Value="#4064E0BD" />
+                                                                <Setter Property="Foreground" Value="White" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsPressed" Value="True">
+                                                                <Setter TargetName="ButtonSurface" Property="Background" Value="#70168565" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsEnabled" Value="False">
+                                                                <Setter Property="Opacity" Value="0.42" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </Border.Resources>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="NativeTimeText" Text="0:00" Foreground="#E9F7F0" FontSize="12"
+                                                       VerticalAlignment="Center" Margin="0,0,12,0" FontFamily="Consolas" />
+                                            <Slider x:Name="NativeProgressSlider" Grid.Column="1" Minimum="0" Maximum="1000" Value="0"
+                                                    VerticalAlignment="Center" PreviewMouseMove="NativeProgressSlider_PreviewMouseMove"
+                                                    MouseLeave="NativeProgressSlider_MouseLeave" PreviewMouseLeftButtonDown="NativeProgressSlider_PreviewMouseLeftButtonDown"
+                                                    PreviewMouseLeftButtonUp="NativeProgressSlider_PreviewMouseLeftButtonUp" />
+                                            <TextBlock x:Name="NativeDurationText" Grid.Column="2" Text="0:00" Foreground="#E9F7F0" FontSize="12"
+                                                       VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Consolas" />
+                                        </Grid>
+                                        <Grid Grid.Row="1" Margin="0,5,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="CurrentFileText" TextTrimming="CharacterEllipsis" MaxWidth="280"
+                                                       Foreground="#F2FAF6" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Button Style="{StaticResource CompactMediaButton}" Content="⏮" Click="NativePrevious_Click" ToolTip="上一项" />
+                                                <Button Style="{StaticResource CompactMediaButton}" Content="↶ 10" Click="NativeBackTenSeconds_Click" ToolTip="后退 10 秒" />
+                                                <Border Width="42" Height="42" Background="#168565" BorderBrush="#64E0BD" BorderThickness="2" CornerRadius="21" Margin="5,0">
+                                                    <Button x:Name="NativePlayButton" Content="▶" Click="NativePlayButton_Click" ToolTip="播放或暂停"
+                                                            Style="{StaticResource CompactMediaButton}" Foreground="White" FontSize="18" Padding="0" />
+                                                </Border>
+                                                <Button Style="{StaticResource CompactMediaButton}" Content="30 ↷" Click="NativeForwardThirtySeconds_Click" ToolTip="前进 30 秒" />
+                                                <Button Style="{StaticResource CompactMediaButton}" Content="⏭" Click="NativeNext_Click" ToolTip="下一项" />
+                                                <Button x:Name="NativeLoopButton" Style="{StaticResource CompactMediaButton}" Content="↻" Click="NativeLoop_Click" ToolTip="循环播放" FontSize="17" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock Text="音量" Foreground="#B6C9BF" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                <Slider x:Name="NativeVolumeSlider" Width="76" Minimum="0" Maximum="100" Value="100" Margin="0,0,8,0"
+                                                        VerticalAlignment="Center" ValueChanged="NativeVolumeSlider_ValueChanged" />
+                                                <Button Style="{StaticResource CompactMediaButton}" Content="⛶" Click="NativeFullscreen_Click" ToolTip="全屏" FontSize="17" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                                <Border x:Name="NativeMediaLoadingOverlay" Visibility="Collapsed" Panel.ZIndex="2"
+                                        Background="#86090B0A" IsHitTestVisible="False">
+                                    <Border Background="#D916211D" BorderBrush="#527DE0BD" BorderThickness="1" CornerRadius="14"
+                                            Padding="20,16" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <StackPanel HorizontalAlignment="Center">
+                                            <Ellipse Width="30" Height="30" Stroke="#64E0BD" StrokeThickness="3" StrokeDashArray="2,2"
+                                                     HorizontalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                                                <Ellipse.RenderTransform>
+                                                    <RotateTransform x:Name="NativeLoadingSpinner" />
+                                                </Ellipse.RenderTransform>
+                                            </Ellipse>
+                                            <TextBlock x:Name="NativeLoadingCaption" Text="正在安全加载视频…" Foreground="White"
+                                                       FontSize="13" Margin="0,10,0,0" HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                </Border>
+                            </Grid>
+                                </vlc:VideoView>
+                            </Grid>
+                        </Grid>
                     </Grid>
 
                     <Grid Grid.Row="2">
@@ -107,7 +254,7 @@
                                     Margin="8,0" ValueChanged="ImageZoomSlider_ValueChanged" />
                             <Button Content="＋" Click="ZoomIn_Click" Padding="8,3" MinHeight="0" />
                         </StackPanel>
-                        <TextBlock Grid.Column="1" Text="鼠标滚到图片顶部或底部可切换上一张/下一张" FontSize="11"
+                        <TextBlock Grid.Column="1" Text="视频在本窗口右侧播放；鼠标滚到图片顶部或底部可切换上一张/下一张" FontSize="11"
                                    Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
                     </Grid>
                 </Grid>

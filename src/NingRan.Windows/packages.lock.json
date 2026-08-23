@@ -2,11 +2,20 @@
   "version": 1,
   "dependencies": {
     "net10.0-windows7.0": {
-      "Microsoft.Web.WebView2": {
+      "LibVLCSharp.WPF": {
         "type": "Direct",
-        "requested": "[1.0.4129.50, )",
-        "resolved": "1.0.4129.50",
-        "contentHash": "BuJC70c7SCl8wlvojLZbc/E5ONmGyG3fhAMmpftCpKerxae//TxgKOTELRK2QRD7m7jigNFQRf6cfVT3ZiIQoQ=="
+        "requested": "[3.10.1, )",
+        "resolved": "3.10.1",
+        "contentHash": "aE/yQPT57bYl+xZ7decqS9TtwvWncIFOzyd7yauM4EWTW8XAfjjwp4HPEx/vh9+uE5GpskIM2EtUc7tyyDjoVQ==",
+        "dependencies": {
+          "LibVLCSharp": "3.10.1"
+        }
+      },
+      "VideoLAN.LibVLC.Windows": {
+        "type": "Direct",
+        "requested": "[3.0.23.1, )",
+        "resolved": "3.0.23.1",
+        "contentHash": "yTGNrzj+Q/t72VNKK0d64jZ+8BGu5Vcp2nxpZ2ll350LkRWKSwqShGpZWcVxXVP8TiMbeGML09+Jzz3hNsIcqA=="
       },
       "Konscious.Security.Cryptography.Argon2": {
         "type": "Transitive",
@@ -21,12 +30,18 @@
         "resolved": "1.1.1",
         "contentHash": "odwOyzj/J/lHJZNwFWJGU/LRecBShupAJ2S8TQqZfhUe9niHzu/voBYK5wuVKsvSpzbfupKQYZguVyIk1sgOkQ=="
       },
+      "LibVLCSharp": {
+        "type": "Transitive",
+        "resolved": "3.10.1",
+        "contentHash": "6iSrYMk6RU8fyftdXrfR1TW3xpR/WhEmliORuWvAu2N05wECb8k2hykWiU53/1zqx616v/qUlDbJJyqv78MDkQ=="
+      },
       "ningran.core": {
         "type": "Project",
         "dependencies": {
           "Konscious.Security.Cryptography.Argon2": "[1.3.1, )"
         }
       }
-    }
+    },
+    "net10.0-windows7.0/win-x64": {}
   }
 }

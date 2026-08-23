@@ -1,7 +1,6 @@
 using System.IO;
-using System.Diagnostics;
-using System.ComponentModel;
 using System.Windows;
+using System.Windows.Threading;
 using NingRan.Core;
 
 namespace NingRan.Windows;
@@ -13,7 +12,9 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        var strictMediaMode = e.Args.Contains("--strict-media", StringComparer.OrdinalIgnoreCase);
+        CrashReportService.CleanupPreviousReports();
+        DispatcherUnhandledException += App_DispatcherUnhandledException;
+        TaskScheduler.UnobservedTaskException += App_UnobservedTaskException;
         var associatedFile = e.Args.FirstOrDefault(File.Exists);
         _singleInstance = new SingleInstanceCoordinator(Dispatcher);
         if (!_singleInstance.IsPrimaryInstance)
@@ -33,7 +34,7 @@ public partial class App : Application
         }
 
         _singleInstance.StartListening();
-        if (NingRanRuntime.IsProcessElevated() && !strictMediaMode)
+        if (NingRanRuntime.IsProcessElevated())
         {
             var notice = new SecurityNoticeWindow();
             notice.ShowDialog();
@@ -62,7 +63,7 @@ public partial class App : Application
         splash.Show();
 
         var minimumDisplay = Task.Delay(TimeSpan.FromSeconds(2));
-        var mainWindow = new MainWindow(strictMediaMode);
+        var mainWindow = new MainWindow();
         await minimumDisplay;
 
         MainWindow = mainWindow;
@@ -99,37 +100,23 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        TaskScheduler.UnobservedTaskException -= App_UnobservedTaskException;
+        CrashReportService.CleanupPreviousReports();
         _singleInstance?.Dispose();
         _singleInstance = null;
         base.OnExit(e);
     }
 
-    public bool RestartForStrictMedia(string archivePath)
+    private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        try
-        {
-            var executable = Environment.ProcessPath
-                ?? throw new InvalidOperationException("无法确定程序启动位置。");
-            _singleInstance?.Dispose();
-            _singleInstance = null;
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = executable,
-                Arguments = $"--strict-media \"{Path.GetFullPath(archivePath)}\"",
-                UseShellExecute = true,
-                Verb = "runas",
-            });
-            Shutdown();
-            return true;
-        }
-        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or IOException)
-        {
-            MessageBox.Show(
-                $"无法以严格防护模式重新打开文件：\n\n{exception.Message}",
-                "凝然加密",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return false;
-        }
+        e.Handled = true;
+        CrashReportDialog.ShowTemporary(MainWindow, "程序遇到错误", "程序遇到未处理的错误，当前操作已停止。", "主窗口", e.Exception);
     }
+
+    private static void App_UnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        try { CrashReportService.Create("后台任务", "后台任务发生错误。", e.Exception); } catch { }
+        e.SetObserved();
+    }
+
 }

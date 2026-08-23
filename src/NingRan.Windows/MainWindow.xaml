@@ -37,6 +37,9 @@
 
     <Border x:Name="WindowFrame" Margin="10" CornerRadius="20" Background="{StaticResource PageBrush}"
             BorderBrush="#C9DDD5" BorderThickness="1">
+        <Border.RenderTransform>
+            <ScaleTransform x:Name="WindowScale" ScaleX="0.985" ScaleY="0.985" />
+        </Border.RenderTransform>
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="5" Opacity="0.20" Color="#17352C" />
         </Border.Effect>
@@ -52,17 +55,21 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Image Source="Assets/AppIcon.png" Width="43" Height="43" Margin="24,0,0,0" Stretch="Uniform" />
                 <StackPanel Grid.Column="1" Margin="11,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="凝然加密" FontSize="21" FontWeight="Bold" />
                     <TextBlock Text="您的文件，只属于您" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                 </StackPanel>
-                <Border Grid.Column="2" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
+                <Button x:Name="StrictProtectionButton" Grid.Column="2" Content="严格防护"
+                        Click="StrictProtection_Click" Padding="12,6" Margin="0,0,10,0"
+                        VerticalAlignment="Center" ToolTip="设置严格防护和允许的软件" />
+                <Border Grid.Column="3" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
                         Margin="0,0,14,0" VerticalAlignment="Center">
-                    <TextBlock Text="6.1.0" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
+                    <TextBlock Text="6.1.10" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
                 </Border>
-                <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
+                <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
                     <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="最小化" />
                     <Button x:Name="MaximizeButton" Style="{StaticResource TitleButton}" Content="&#xE922;"
                             Click="MaximizeButton_Click" ToolTip="最大化" />

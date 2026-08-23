@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using Microsoft.Win32;
 using NingRan.Core;
@@ -33,12 +34,20 @@ public partial class MainWindow : Window
     private bool _physicalOperationActive;
     private HwndSource? _windowSource;
     private SecureArchiveSession? _archiveSession;
+    private readonly StrictProtectionCoordinator _strictProtection = new();
+    private StrictProtectionSettings _strictProtectionSettings = new();
+    private bool _strictThreatHandled;
+    private bool _strictStartupAttempted;
+    private bool _closingAnimationActive;
+    private bool _closingAnimationComplete;
     private readonly bool _allowElevatedMediaBrowsing;
 
     public MainWindow(bool allowElevatedMediaBrowsing = false)
     {
         InitializeComponent();
         _allowElevatedMediaBrowsing = allowElevatedMediaBrowsing;
+        _strictProtectionSettings = StrictProtectionSettings.Load();
+        _strictProtection.AlertRaised += StrictProtection_AlertRaised;
         _trustedContactService = new NrTrustedContactService(_identityService);
         _archiveService = new NrArchiveService(
             keyFileService: _keyFileService,
@@ -50,7 +59,10 @@ public partial class MainWindow : Window
         MigrateTrustedContactStorage();
         RefreshPhysicalDeviceList();
         SourceInitialized += MainWindow_SourceInitialized;
+        ContentRendered += MainWindow_ContentRendered;
+        Loaded += MainWindow_Loaded;
         RefreshSettingsRegion();
+        RefreshStrictProtectionButton();
     }
 
     private bool IsEncrypting => EncryptRadio.IsChecked == true;
@@ -768,7 +780,14 @@ public partial class MainWindow : Window
 
                 if (choice == MessageBoxResult.No)
                 {
-                    _ = ((App)Application.Current).RestartForStrictMedia(_sourcePath!);
+                    if (!await EnableStrictProtectionAsync())
+                    {
+                        MessageBox.Show(this, $"严格防护监控没有启动，因此没有打开安全内容。\n\n原因：{GetStrictProtectionFailureReason()}\n\n请在 Windows 提示中允许监控程序，或稍后重试。",
+                            AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    await OpenArchiveForBrowsingAsync(operationPassword);
                     return;
                 }
             }
@@ -1164,6 +1183,146 @@ public partial class MainWindow : Window
     }
 
     private void CloseUnlockedArchive_Click(object sender, RoutedEventArgs e) => CloseArchiveSession();
+
+    private async void StrictProtection_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy)
+        {
+            MessageBox.Show(this, "请先等待当前操作完成，再调整严格防护设置。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new StrictProtectionDialog(_strictProtectionSettings) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _strictProtectionSettings = dialog.Settings;
+        _strictProtectionSettings.Save();
+        if (_strictProtectionSettings.Enabled)
+        {
+            if (!await EnableStrictProtectionAsync())
+            {
+                MessageBox.Show(this, $"设置已经记住，但本次未能启动监控。\n\n原因：{GetStrictProtectionFailureReason()}\n\n下次启动时会再次请求管理员确认。",
+                    AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        else
+        {
+            await _strictProtection.StopAsync();
+        }
+
+        RefreshStrictProtectionButton();
+    }
+
+    private async void MainWindow_ContentRendered(object? sender, EventArgs e)
+    {
+        if (_strictStartupAttempted)
+        {
+            return;
+        }
+
+        _strictStartupAttempted = true;
+        if (_strictProtectionSettings.Enabled && !await EnableStrictProtectionAsync())
+        {
+            MessageBox.Show(this, $"上次已开启严格防护，但本次监控没有启动。\n\n原因：{GetStrictProtectionFailureReason()}\n\n您可以稍后点击“严格防护”再次启动。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        RefreshStrictProtectionButton();
+    }
+
+    private async Task<bool> EnableStrictProtectionAsync()
+    {
+        if (_strictProtection.IsRunning)
+        {
+            return true;
+        }
+
+        var started = await _strictProtection.StartAsync(_strictProtectionSettings);
+        if (started)
+        {
+            _strictThreatHandled = false;
+        }
+        if (started && !_strictProtectionSettings.Enabled)
+        {
+            _strictProtectionSettings = new StrictProtectionSettings
+            {
+                Enabled = true,
+                AllowedProcessPaths = _strictProtectionSettings.AllowedProcessPaths,
+            };
+            _strictProtectionSettings.Save();
+        }
+
+        RefreshStrictProtectionButton();
+        return started;
+    }
+
+    private string GetStrictProtectionFailureReason() => _strictProtection.LastFailureReason ?? "没有收到监控程序的启动确认。";
+
+    private void StrictProtection_AlertRaised(object? sender, StrictProtectionAlert alert)
+    {
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            if (_strictThreatHandled)
+            {
+                return;
+            }
+
+            _strictThreatHandled = true;
+            try
+            {
+                SecurityEventLog.Append(alert);
+            }
+            catch
+            {
+                // 即使日志位置不可用，也必须继续停止操作和清理明文。
+            }
+            _progressWindow?.SetCancelling();
+            _operationCancellation?.Cancel();
+            CloseArchiveSession();
+            await _strictProtection.StopAsync();
+
+            TemporaryContentCleanupResult cleanup;
+            try
+            {
+                cleanup = await Task.Run(NrArchiveService.CleanupAbandonedTemporaryContent);
+            }
+            catch (Exception exception)
+            {
+                cleanup = new TemporaryContentCleanupResult(0,
+                    [new TemporaryContentCleanupFailure("临时明文清理", exception.Message)]);
+            }
+
+            var processName = string.IsNullOrWhiteSpace(alert.ProcessPath)
+                ? $"进程编号 {alert.ProcessId}"
+                : alert.ProcessPath;
+            var cleanupResult = cleanup.Failures.Count == 0
+                ? "已停止当前操作，并已执行临时明文清理。"
+                : $"已停止当前操作；有 {cleanup.Failures.Count} 项临时内容将由下次启动继续清理。";
+            MessageBox.Show(this,
+                $"严格防护发现未允许的软件尝试读取受保护内存：\n\n访问程序：{processName}\n被访问组件：{alert.TargetComponent}\n\n{cleanupResult}\n事件已记录到安全日志。",
+                "严格防护已介入", MessageBoxButton.OK, MessageBoxImage.Warning);
+            RefreshStrictProtectionButton();
+        });
+    }
+
+    private void RefreshStrictProtectionButton()
+    {
+        if (!IsInitialized || StrictProtectionButton is null)
+        {
+            return;
+        }
+
+        StrictProtectionButton.Content = _strictProtection.IsRunning ? "严格防护：已开启" : "严格防护";
+        StrictProtectionButton.ToolTip = _strictProtection.IsRunning
+            ? "严格防护监控正在运行"
+            : _strictProtectionSettings.Enabled
+                ? "严格防护已记住，但本次监控尚未启动"
+                : "设置严格防护和允许的软件";
+    }
 
     private void CloseArchiveSession()
     {
@@ -1566,7 +1725,7 @@ public partial class MainWindow : Window
         var message = exception is NingRanException or ArgumentException
             ? exception.Message
             : $"{exception.Message}\n\n未完成内容已经清理，原文件没有变动。";
-        MessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+        CrashReportDialog.ShowTemporary(this, title, message, "主窗口操作", exception);
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1594,14 +1753,30 @@ public partial class MainWindow : Window
         DragMove();
     }
 
-    private void MinimizeButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        WindowFrame.Opacity = 0;
+        await AnimateWindowFrameAsync(1, 1, 180);
+    }
+
+    private async void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        await AnimateWindowFrameAsync(0.985, 0.35, 130);
+        WindowState = WindowState.Minimized;
+        WindowScale.ScaleX = WindowScale.ScaleY = 1;
+        WindowFrame.Opacity = 1;
+    }
 
     private void MaximizeButton_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void ToggleMaximize() =>
+    private async void ToggleMaximize()
+    {
+        await AnimateWindowFrameAsync(0.99, 0.78, 100);
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        await AnimateWindowFrameAsync(1, 1, 150);
+    }
 
     private void Window_StateChanged(object sender, EventArgs e)
     {
@@ -1617,8 +1792,16 @@ public partial class MainWindow : Window
     {
         if (!_isBusy || _operationCancellation is null)
         {
+            if (!_closingAnimationComplete)
+            {
+                e.Cancel = true;
+                _ = CloseAfterAnimationAsync();
+                return;
+            }
             CloseArchiveSession();
             _windowSource?.RemoveHook(WindowMessageHook);
+            _strictProtection.AlertRaised -= StrictProtection_AlertRaised;
+            _ = _strictProtection.DisposeAsync();
             return;
         }
 
@@ -1630,5 +1813,26 @@ public partial class MainWindow : Window
             _progressWindow?.SetCancelling();
             _operationCancellation.Cancel();
         }
+    }
+
+    private async Task CloseAfterAnimationAsync()
+    {
+        if (_closingAnimationActive) return;
+        _closingAnimationActive = true;
+        await AnimateWindowFrameAsync(0.985, 0, 150);
+        _closingAnimationComplete = true;
+        Close();
+    }
+
+    private Task AnimateWindowFrameAsync(double scale, double opacity, int milliseconds)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var duration = new Duration(TimeSpan.FromMilliseconds(milliseconds));
+        var opacityAnimation = new DoubleAnimation(opacity, duration) { FillBehavior = FillBehavior.HoldEnd };
+        opacityAnimation.Completed += (_, _) => completion.TrySetResult();
+        WindowScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(scale, duration) { FillBehavior = FillBehavior.HoldEnd });
+        WindowScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(scale, duration) { FillBehavior = FillBehavior.HoldEnd });
+        WindowFrame.BeginAnimation(OpacityProperty, opacityAnimation);
+        return completion.Task;
     }
 }

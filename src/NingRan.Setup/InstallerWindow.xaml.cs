@@ -21,6 +21,7 @@ public partial class InstallerWindow : Window
     public InstallerWindow(bool isUninstall, string? uninstallPath)
     {
         InitializeComponent();
+        VersionText.Text = $"版本 {SetupProduct.Version} · Windows x64";
         _isUninstall = isUninstall;
         _uninstallPath = uninstallPath is null
             ? null
@@ -168,7 +169,7 @@ public partial class InstallerWindow : Window
                 progress);
             _installedExecutable = Path.Combine(state.InstallPath, SetupProduct.MainExecutableName);
             FinishTitle.Text = "凝然加密安装完成";
-            FinishMessage.Text = "程序已经完整安装。身份、设置和已有数据均未被覆盖。";
+            FinishMessage.Text = $"凝然加密 {SetupProduct.Version} 已完整安装。身份、设置和已有数据均未被覆盖。";
             RunAfterInstallCheck.Visibility = Visibility.Visible;
             SetBusy(false);
             ShowStage(InstallerStage.Finish);
