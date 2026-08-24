@@ -315,7 +315,10 @@ public static class SetupPathSafety
             new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value,
             new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value,
         };
-        var dangerous = FileSystemRights.Write | FileSystemRights.Modify | FileSystemRights.FullControl |
+        // Do not include composite rights such as Modify or FullControl here. Those
+        // values also contain read/execute bits, which would incorrectly classify
+        // the required Builtin Users read-and-execute rule as writable access.
+        var dangerous = FileSystemRights.Write |
             FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles |
             FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
         foreach (FileSystemAccessRule rule in security.GetAccessRules(
