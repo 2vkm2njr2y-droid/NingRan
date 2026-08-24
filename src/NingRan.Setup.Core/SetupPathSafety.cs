@@ -5,7 +5,10 @@ namespace NingRan.Setup;
 
 public static class SetupPathSafety
 {
-    public static string ValidateInstallPath(string path, bool allowExistingInstall)
+    public static string ValidateInstallPath(
+        string path,
+        bool allowExistingInstall,
+        bool verifyExistingPermissions = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -37,7 +40,7 @@ public static class SetupPathSafety
                 throw new InvalidOperationException("安装位置不能是快捷链接、符号链接或目录联接。");
             }
 
-            if (allowExistingInstall)
+            if (allowExistingInstall && verifyExistingPermissions)
             {
                 VerifyDirectoryAcl(fullPath);
             }

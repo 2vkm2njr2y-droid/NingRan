@@ -136,7 +136,34 @@ public partial class InstallerWindow : Window
         {
             var installPath = SetupPathSafety.ValidateInstallPath(
                 InstallPathInput.Text,
-                allowExistingInstall: SetupPathSafety.IsSecureExistingInstall(InstallPathInput.Text));
+                allowExistingInstall: true,
+                verifyExistingPermissions: false);
+
+            var existingState = InstallState.TryLoad(installPath);
+            if (existingState is not null)
+            {
+                try
+                {
+                    SetupPathSafety.VerifyInstallDirectoryPermissions(installPath);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    var choice = MessageBox.Show(
+                        this,
+                        $"检测到现有凝然加密安装目录的权限不安全：\n\n{exception.Message}\n\n安装程序需要先收紧该目录权限。现有程序和个人数据会保留，是否继续升级？",
+                        "需要修复安装目录权限",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+                    if (choice != MessageBoxResult.Yes)
+                    {
+                        return;
+                    }
+
+                    SetupPathSafety.HardenInstallDirectory(installPath);
+                }
+            }
+
             options = new SetupOptions(
                 installPath,
                 DesktopShortcutCheck.IsChecked == true,
