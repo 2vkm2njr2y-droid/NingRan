@@ -18,13 +18,13 @@ public partial class App : Application
             return;
         }
 
-        if (IsProcessElevated())
+        if (!IsProcessElevated())
         {
             MessageBox.Show(
-                "凝然加密采用当前用户安装，不需要管理员权限。\n\n请关闭窗口后直接双击安装包，不要选择“以管理员身份运行”。",
+                "凝然加密安装和卸载需要管理员权限。\n\n请在 Windows 的管理员确认窗口中选择“是”。",
                 "凝然加密安装程序",
                 MessageBoxButton.OK,
-                MessageBoxImage.Stop);
+                MessageBoxImage.Warning);
             Shutdown(-1);
             return;
         }
@@ -33,6 +33,28 @@ public partial class App : Application
             ?? AppContext.BaseDirectory;
         var uninstall = SetupModeDetector.ShouldUninstall(e.Args, executableDirectory);
         var installPath = uninstall ? executableDirectory : null;
+        if (uninstall && SetupPathSafety.IsLegacyInstallPath(installPath!))
+        {
+            MessageBox.Show(
+                "检测到旧版用户目录安装。为避免从可被普通程序修改的位置请求管理员权限，请先运行最新安装包完成升级迁移，再从 Windows 的“已安装的应用”中卸载。",
+                "需要先升级安装",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            Shutdown(-1);
+            return;
+        }
+
+        if (uninstall && !SetupPathSafety.IsSupportedInstallPath(installPath!))
+        {
+            MessageBox.Show(
+                "卸载位置不是凝然加密的受支持安装目录，已停止操作。请从 Windows 的“已安装的应用”中重新启动卸载。",
+                "无法开始卸载",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(-1);
+            return;
+        }
+
         if (uninstall && InstallState.TryLoad(installPath!) is null)
         {
             MessageBox.Show(

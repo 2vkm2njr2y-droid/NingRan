@@ -1,0 +1,83 @@
+<Window x:Class="NingRan.Windows.HelpWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="凝然加密帮助文档" Icon="Assets/AppIcon.ico"
+        Width="1040" Height="720" MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterOwner">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="248" />
+        </Grid.ColumnDefinitions>
+
+        <ScrollViewer x:Name="DocumentScroll" Grid.Column="0" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
+            <StackPanel Margin="38,32,34,40" MaxWidth="720">
+                <TextBlock Text="凝然加密帮助文档" FontSize="25" FontWeight="SemiBold" />
+                <TextBlock Text="本说明帮助您安全地加密、查看、导出和管理内容。" Foreground="{StaticResource MutedBrush}"
+                           Margin="0,6,0,28" FontSize="14" />
+
+                <StackPanel x:Name="OverviewSection">
+                    <TextBlock Text="开始使用" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="选择文件或文件夹后，可选择加密或解密。加密文件会以 .nrenc 保存；成功打开 .nrenc 后，可以在程序内浏览文件树，不需要先导出全部内容。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="ArchiveSection">
+                    <TextBlock Text="查看、导出与修改加密内容" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="在安全查看的文件树中，右键文件或文件夹可选择“单独解密副本”或“从加密文件中删除”。导出文件夹会保留其内部层级；删除文件夹会同时删除其中的全部内容。两项操作都会显示进度，可随时取消。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="PasswordsSection">
+                    <TextBlock Text="密码、密匙与身份" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="请把加密密码、密匙文件、身份备份和授权设备分开保管。遗失密码、密匙或满足解锁条件的设备后，凝然加密无法替您找回内容。修改加密文件时，需要按界面要求输入原加密密码和发送者身份密码。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="PrivacySection">
+                    <TextBlock Text="隐私与本地处理" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="文件加密、解密、身份管理和设备核验均在本机完成。程序不会主动上传文件内容、密码、密匙、身份信息或使用记录。只有您主动选择打开、导出或分享时，相关内容才会在您指定的位置使用。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="SecureViewingSection">
+                    <TextBlock Text="严格防护与高安全打开" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="严格防护会请求管理员确认以启动单独的监控程序。它会定期检查主窗口、播放器和预览画面是否仍被未允许的软件读取；发现后会记录事件、停止当前操作并清理临时内容。它用于发现和缩短风险，不能保证拦截一次很短的读取。不要把来源不明的软件加入允许名单。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,12" />
+                    <TextBlock Text="需要更高保护时，请选择“高安全打开（管理员确认）”。它会启动独立的管理员查看窗口，普通窗口不会传递密码、密匙或已解锁内容；您需要重新验证。高安全窗口只允许在程序内查看，不能导出、删除或修改文件。它能减少普通窗口中保留解锁材料的时间，但不是 Windows 的最高级受保护进程；同一 Windows 账户下、已经能读取其他程序内存的软件仍可能超出程序控制范围。截图、管理员或更高权限的软件，以及同样已获得管理员权限的恶意软件，也不在这个模式的保护范围内。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,0,0,12" />
+                    <TextBlock Text="程序会检查 Windows 是否提供虚拟化安全区能力。密码和安全查看期间的数据密钥会尝试使用锁定内存，并在使用后立即清除；Windows 可能因系统资源或权限限制而无法锁定某一块内存。不支持时，原有加密和查看功能仍可使用。普通桌面程序不能自行获得 Windows 的最高级进程保护或安全区，因此任何提示都不代表绝对防护。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,0,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="SafetySection">
+                    <TextBlock Text="安全边界与免责声明" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="凝然加密按当前状态提供，不保证适用于每一种电脑、存储设备或第三方程序。请在处理重要内容前保留独立备份，并确认您有权处理所选文件。管理员权限、系统级工具或截图功能可能带来超出程序控制范围的风险；严格防护可以提高提示与限制能力，但不能替代系统安全、备份和谨慎操作。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,0" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Column="1" Background="#F8FBFA" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,0,0"
+                Padding="20,28">
+            <StackPanel>
+                <TextBlock Text="目录" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,14" />
+                <ListBox x:Name="HelpNavigation" SelectionChanged="HelpNavigation_SelectionChanged" BorderThickness="0"
+                         Background="Transparent">
+                    <ListBoxItem Content="开始使用" Padding="10,8" />
+                    <ListBoxItem Content="查看、导出与修改" Padding="10,8" />
+                    <ListBoxItem Content="密码、密匙与身份" Padding="10,8" />
+                    <ListBoxItem Content="隐私与本地处理" Padding="10,8" />
+                    <ListBoxItem Content="严格防护与高安全打开" Padding="10,8" />
+                    <ListBoxItem Content="安全边界与免责声明" Padding="10,8" />
+                </ListBox>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

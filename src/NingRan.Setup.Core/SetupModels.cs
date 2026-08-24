@@ -7,7 +7,7 @@ public static class SetupProduct
 {
     public const string Id = "NingRan.Encryption";
     public const string Name = "凝然加密";
-    public const string Version = "6.1.10";
+    public const string Version = "6.1.11";
     public const string MainExecutableName = "NingRan.exe";
     public const string UninstallerName = "卸载凝然加密.exe";
     public const string StateFileName = "install-state.json";
@@ -16,6 +16,10 @@ public static class SetupProduct
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\NingRan";
 
     public static string DefaultInstallPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        Name);
+
+    public static string LegacyInstallPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Programs",
         Name);
@@ -40,6 +44,8 @@ public sealed class InstallState
     public string Version { get; init; } = SetupProduct.Version;
 
     public required string InstallPath { get; init; }
+
+    public string? MigratedFromPath { get; init; }
 
     public bool DesktopShortcut { get; init; }
 

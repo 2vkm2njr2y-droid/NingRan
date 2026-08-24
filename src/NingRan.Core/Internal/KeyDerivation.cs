@@ -18,6 +18,7 @@ internal static class KeyDerivation
         cancellationToken.ThrowIfCancellationRequested();
 
         var passwordBytes = password.GetBytes().ToArray();
+        using var passwordMemory = SensitiveMemoryLock.Create(passwordBytes);
         try
         {
             using var argon2 = new Argon2id(passwordBytes)

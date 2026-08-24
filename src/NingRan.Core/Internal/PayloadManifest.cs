@@ -18,7 +18,8 @@ internal sealed record PayloadEntry(
     long Length,
     long LastWriteUtcTicks,
     WindowsFileIdentity Identity,
-    SafeFileHandle SourceHandle);
+    SafeFileHandle? SourceHandle,
+    Func<CancellationToken, ValueTask<Stream>>? ContentFactory = null);
 
 internal sealed class PayloadManifest : IDisposable
 {
@@ -52,8 +53,48 @@ internal sealed class PayloadManifest : IDisposable
     {
         foreach (var entry in Entries)
         {
-            entry.SourceHandle.Dispose();
+            entry.SourceHandle?.Dispose();
         }
+    }
+
+    internal static PayloadManifest Create(
+        bool isDirectory,
+        string rootName,
+        IReadOnlyList<PayloadEntry> entries,
+        SizePaddingMode sizePadding)
+    {
+        rootName = PathSafety.ValidateNameSegment(rootName);
+        if (entries.Count == 0 || entries.Count > PayloadContainer.MaximumEntries)
+        {
+            throw new NingRanException("加密文件中的项目数量不正确。");
+        }
+
+        long totalBytes = 0;
+        var totalNameBytes = Encoding.UTF8.GetByteCount(rootName);
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            var normalized = PathSafety.NormalizeRelativePath(entry.RelativePath);
+            if (!string.Equals(normalized, entry.RelativePath, StringComparison.Ordinal) || !paths.Add(normalized))
+            {
+                throw new NingRanException("追加后的文件名存在重复，无法安全保存。");
+            }
+
+            totalNameBytes = checked(totalNameBytes + Encoding.UTF8.GetByteCount(normalized));
+            if (totalNameBytes > PayloadContainer.MaximumTotalNameBytes)
+            {
+                throw new NingRanException("追加后的文件和文件夹名称总长度超过安全上限。");
+            }
+
+            if (entry.Kind == PayloadEntryKind.File)
+            {
+                totalBytes = checked(totalBytes + entry.Length);
+            }
+        }
+
+        var copied = entries.ToArray();
+        return new PayloadManifest(isDirectory, rootName, copied, totalBytes,
+            CalculatePaddingLength(isDirectory, rootName, copied, sizePadding));
     }
 
     public static PayloadManifest Build(
@@ -181,7 +222,7 @@ internal sealed class PayloadManifest : IDisposable
         {
             foreach (var entry in entries)
             {
-                entry.SourceHandle.Dispose();
+                entry.SourceHandle?.Dispose();
             }
 
             throw;

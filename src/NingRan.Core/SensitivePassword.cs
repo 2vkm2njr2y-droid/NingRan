@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
 using System.Text;
+using NingRan.Core.Internal;
 
 namespace NingRan.Core;
 
@@ -10,6 +11,7 @@ public sealed class SensitivePassword : IDisposable
     private const int MaximumUtf8Bytes = 4096;
 
     private byte[]? _utf8Bytes;
+    private SensitiveMemoryLock? _memoryLock;
 
     private SensitivePassword(byte[] utf8Bytes)
     {
@@ -20,6 +22,7 @@ public sealed class SensitivePassword : IDisposable
         }
 
         _utf8Bytes = utf8Bytes;
+        _memoryLock = SensitiveMemoryLock.Create(utf8Bytes);
     }
 
     public bool IsEmpty => GetBytes().Length == 0;
@@ -63,6 +66,7 @@ public sealed class SensitivePassword : IDisposable
 
     public void Dispose()
     {
+        Interlocked.Exchange(ref _memoryLock, null)?.Dispose();
         var bytes = Interlocked.Exchange(ref _utf8Bytes, null);
         if (bytes is not null)
         {
@@ -89,6 +93,7 @@ public sealed class SensitivePassword : IDisposable
 
     ~SensitivePassword()
     {
+        Interlocked.Exchange(ref _memoryLock, null)?.Dispose();
         var bytes = _utf8Bytes;
         if (bytes is not null)
         {

@@ -15,22 +15,30 @@ public static class ShellIntegration
 
     public static string? FindInstalledPath()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(SetupProduct.UninstallRegistryPath, writable: false);
-        var value = key?.GetValue("InstallLocation") as string;
-        if (string.IsNullOrWhiteSpace(value))
+        foreach (var hive in GetUninstallHives())
         {
-            return null;
+            using var key = hive.OpenSubKey(SetupProduct.UninstallRegistryPath, writable: false);
+            var value = key?.GetValue("InstallLocation") as string;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            try
+            {
+                var path = Path.GetFullPath(value);
+                if (SetupPathSafety.IsSupportedInstallPath(path) && InstallState.TryLoad(path) is not null)
+                {
+                    return path;
+                }
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                // 继续检查另一个注册表位置。
+            }
         }
 
-        try
-        {
-            var path = Path.GetFullPath(value);
-            return InstallState.TryLoad(path) is null ? null : path;
-        }
-        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
+        return null;
     }
 
     public static IReadOnlyList<AssociationBackup> CaptureAssociationBackups()
@@ -98,7 +106,7 @@ public static class ShellIntegration
             }
         }
 
-        using (var uninstallKey = Registry.CurrentUser.CreateSubKey(
+        using (var uninstallKey = GetUninstallHive(state).CreateSubKey(
                    SetupProduct.UninstallRegistryPath,
                    writable: true))
         {
@@ -116,7 +124,7 @@ public static class ShellIntegration
         NotifyShellChanged();
     }
 
-    public static void Remove(InstallState state)
+    public static void Remove(InstallState state, bool removeUninstallEntry = true)
     {
         var executable = Path.Combine(state.InstallPath, SetupProduct.MainExecutableName);
         RemoveShortcutsForTarget(executable);
@@ -150,17 +158,37 @@ public static class ShellIntegration
                 throwOnMissingSubKey: false);
         }
 
-        using (var uninstallKey = Registry.CurrentUser.OpenSubKey(
-                   SetupProduct.UninstallRegistryPath,
-                   writable: false))
+        if (removeUninstallEntry)
         {
-            var recordedPath = uninstallKey?.GetValue("InstallLocation") as string;
-            if (string.Equals(recordedPath, state.InstallPath, StringComparison.OrdinalIgnoreCase))
+            var isLegacy = SetupPathSafety.IsLegacyInstallPath(state.InstallPath);
+            var hive = isLegacy ? Registry.CurrentUser : Registry.LocalMachine;
+            using (var uninstallKey = hive.OpenSubKey(
+                       SetupProduct.UninstallRegistryPath,
+                       writable: false))
             {
-                uninstallKey?.Dispose();
-                Registry.CurrentUser.DeleteSubKeyTree(
+                var recordedPath = uninstallKey?.GetValue("InstallLocation") as string;
+                if (string.Equals(recordedPath, state.InstallPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    uninstallKey?.Dispose();
+                    hive.DeleteSubKeyTree(
+                        SetupProduct.UninstallRegistryPath,
+                        throwOnMissingSubKey: false);
+                }
+            }
+
+            // 旧版安装曾把卸载登记写入当前用户注册表；升级或卸载时一并清理同路径残留。
+            if (!isLegacy)
+            {
+                using var legacyKey = Registry.CurrentUser.OpenSubKey(
                     SetupProduct.UninstallRegistryPath,
-                    throwOnMissingSubKey: false);
+                    writable: false);
+                if (string.Equals(legacyKey?.GetValue("InstallLocation") as string, state.InstallPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    legacyKey?.Dispose();
+                    Registry.CurrentUser.DeleteSubKeyTree(
+                        SetupProduct.UninstallRegistryPath,
+                        throwOnMissingSubKey: false);
+                }
             }
         }
 
@@ -277,6 +305,17 @@ public static class ShellIntegration
         "凝然加密.lnk");
 
     private static void NotifyShellChanged() => SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
+
+    private static RegistryKey GetUninstallHive(InstallState state) =>
+        SetupPathSafety.IsLegacyInstallPath(state.InstallPath)
+            ? Registry.CurrentUser
+            : Registry.LocalMachine;
+
+    private static IEnumerable<RegistryKey> GetUninstallHives()
+    {
+        yield return Registry.LocalMachine;
+        yield return Registry.CurrentUser;
+    }
 
     [DllImport("shell32.dll")]
     private static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);

@@ -237,12 +237,12 @@ progress.addEventListener('pointermove',e=>{if(!m.duration)return;let r=progress
 
 public sealed record PlayerOptions(string Pipe, string Token, string Name, long Length, string Mime, string Kind)
 {
-    public static bool TryParse(string[] args, out PlayerOptions options)
+    public static bool TryParse(string[] args, string? token, out PlayerOptions options)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index + 1 < args.Length; index += 2) values[args[index]] = args[index + 1];
         if (!values.TryGetValue("--pipe", out var pipe) || !pipe.StartsWith("NingRan.Media.", StringComparison.Ordinal) ||
-            !values.TryGetValue("--token", out var token) || token.Length < 32 ||
+            string.IsNullOrWhiteSpace(token) || token.Length < 32 ||
             !values.TryGetValue("--name", out var name) || !values.TryGetValue("--length", out var lengthValue) ||
             !long.TryParse(lengthValue, out var length) || length <= 0 ||
             !values.TryGetValue("--mime", out var mime) || !values.TryGetValue("--kind", out var kind) || kind is not ("video" or "audio"))

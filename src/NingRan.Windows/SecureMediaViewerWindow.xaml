@@ -83,16 +83,19 @@
                             <TextBlock x:Name="EmptyText" Text="请选择左侧文件" Foreground="{StaticResource MutedBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <ScrollViewer x:Name="ImageScroll" Visibility="Collapsed" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                      Background="#17221E" MouseWheel="ImageScroll_MouseWheel">
-                            <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Image x:Name="ImageView" Stretch="None" RenderOptions.BitmapScalingMode="HighQuality">
-                                    <Image.LayoutTransform>
+                        <Grid x:Name="ImageScroll" Visibility="Collapsed" Background="#17221E" ClipToBounds="True"
+                              MouseWheel="ImageScroll_MouseWheel" MouseLeftButtonDown="ImageScroll_MouseLeftButtonDown"
+                              MouseMove="ImageScroll_MouseMove" MouseLeftButtonUp="ImageScroll_MouseLeftButtonUp">
+                            <Image x:Name="ImageView" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                                   RenderTransformOrigin="0.5,0.5">
+                                <Image.RenderTransform>
+                                    <TransformGroup>
                                         <ScaleTransform x:Name="ImageScale" ScaleX="1" ScaleY="1" />
-                                    </Image.LayoutTransform>
-                                </Image>
-                            </Grid>
-                        </ScrollViewer>
+                                        <TranslateTransform x:Name="ImageTranslate" />
+                                    </TransformGroup>
+                                </Image.RenderTransform>
+                            </Image>
+                        </Grid>
                         <TextBox x:Name="TextView" Visibility="Collapsed" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="14"
                                  Background="#F8FBF9" BorderThickness="0" Padding="14" />
@@ -105,11 +108,11 @@
                                 <Grid x:Name="NativeMediaOverlay" Background="Transparent"
                                       MouseMove="NativeMediaOverlay_MouseMove"
                                       MouseLeftButtonDown="NativeMediaOverlay_MouseLeftButtonDown">
-                                <TextBlock x:Name="NativeMediaHint" Text="← / → 调整播放进度　双击画面全屏" Visibility="Collapsed"
+                                <TextBlock x:Name="NativeMediaHint" Text="点击画面暂停或继续　← / → 调整播放进度　双击画面全屏" Visibility="Collapsed"
                                            Foreground="#B6C9BF" FontSize="13" Opacity="0.76"
                                            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,15,0,0" IsHitTestVisible="False" />
                                 <Border x:Name="NativePreviewPopup" Visibility="Collapsed" Background="#E8121816" CornerRadius="8"
-                                        Padding="5" Width="230" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="18,0,0,108"
+                                        Padding="5" Width="230" Height="151" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,0,0,0"
                                         IsHitTestVisible="False">
                                     <StackPanel>
                                         <Grid Width="220" Height="124" Background="#101916">
@@ -253,8 +256,9 @@
                             <Slider x:Name="ImageZoomSlider" Width="150" Minimum="0.2" Maximum="4" Value="1" TickFrequency="0.1"
                                     Margin="8,0" ValueChanged="ImageZoomSlider_ValueChanged" />
                             <Button Content="＋" Click="ZoomIn_Click" Padding="8,3" MinHeight="0" />
+                            <Button Content="还原" Click="ImageZoomReset_Click" Padding="10,3" MinHeight="0" />
                         </StackPanel>
-                        <TextBlock Grid.Column="1" Text="视频在本窗口右侧播放；鼠标滚到图片顶部或底部可切换上一张/下一张" FontSize="11"
+                        <TextBlock Grid.Column="1" Text="图片可按住 Ctrl 并滚动鼠标滚轮缩放；放大后可直接拖动图片。" FontSize="11"
                                    Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
                     </Grid>
                 </Grid>

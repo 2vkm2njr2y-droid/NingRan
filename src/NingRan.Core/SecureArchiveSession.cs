@@ -12,6 +12,7 @@ public sealed class SecureArchiveSession : IDisposable
     private readonly FileStream _input;
     private readonly ArchiveHeader _header;
     private byte[]? _dataKey;
+    private readonly SensitiveMemoryLock _dataKeyMemory;
     private readonly IndexedPayloadContainer.IndexedPayload _payload;
     private readonly PhysicalDeviceUnlock? _physicalUnlock;
     private readonly PhysicalDeviceMonitor? _physicalMonitor;
@@ -25,15 +26,18 @@ public sealed class SecureArchiveSession : IDisposable
         IndexedPayloadContainer.IndexedPayload payload,
         PhysicalDeviceUnlock? physicalUnlock,
         PhysicalDeviceMonitor? physicalMonitor,
-        string verifiedSenderName)
+        string verifiedSenderName,
+        string archivePath)
     {
         _input = input;
         _header = header;
         _dataKey = dataKey;
+        _dataKeyMemory = SensitiveMemoryLock.Create(dataKey);
         _payload = payload;
         _physicalUnlock = physicalUnlock;
         _physicalMonitor = physicalMonitor;
         VerifiedSenderName = verifiedSenderName;
+        ArchivePath = archivePath;
         _entries = payload.Entries.ToDictionary(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase);
         Entries = payload.Entries.Select(entry => new SecureArchiveEntry(
             entry.RelativePath,
@@ -45,6 +49,9 @@ public sealed class SecureArchiveSession : IDisposable
 
     public string RootName => _payload.RootName;
     public bool IsDirectory => _payload.IsDirectory;
+    public EncryptionMode Mode => _header.Mode;
+    public string ArchivePath { get; }
+    public bool IsOpen => !_disposed;
     public string VerifiedSenderName { get; }
     public IReadOnlyList<SecureArchiveEntry> Entries { get; }
     public CancellationToken CancellationToken => _physicalMonitor?.Token ?? CancellationToken.None;
@@ -195,6 +202,109 @@ public sealed class SecureArchiveSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// 导出文件树中的一个文件，或将选中的文件夹及其所有内容作为独立副本导出。
+    /// </summary>
+    public async Task<DecryptionResult> ExportSelectionAsync(
+        string relativePath,
+        string destinationDirectory,
+        string? outputName = null,
+        IProgress<CryptoProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var selected = GetArchiveEntry(relativePath);
+        var destination = Path.GetFullPath(destinationDirectory);
+        Directory.CreateDirectory(destination);
+        using var destinationLock = WindowsFileSystemSafety.LockDirectoryPath(destination);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
+        var token = linked.Token;
+        var selectedPath = selected.RelativePath;
+        var selectedIsDirectory = selected.Kind == PayloadEntryKind.Directory;
+        var selectedEntries = _payload.Entries
+            .Where(entry => string.Equals(entry.RelativePath, selectedPath, StringComparison.OrdinalIgnoreCase) ||
+                            selectedIsDirectory && entry.RelativePath.StartsWith(selectedPath + "/", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var name = PathSafety.ValidateNameSegment(outputName ?? Path.GetFileName(selectedPath));
+        var totalBlocks = Math.Max(_payload.TotalBlockCount, 1);
+        progress?.Report(new CryptoProgress(CryptoStage.Verifying, 0, totalBlocks, "正在完整验证加密内容，不创建文件…"));
+        await IndexedPayloadContainer.ValidateAllAsync(
+            _input,
+            _header,
+            _dataKey!,
+            _payload,
+            (completed, message) => progress?.Report(new CryptoProgress(CryptoStage.Verifying, completed, totalBlocks, message)),
+            token).ConfigureAwait(false);
+
+        var staging = SecureStagingArea.Create(destination);
+        try
+        {
+            var directoryTimes = new List<(string Path, long Ticks)>();
+            var totalBytes = Math.Max(selectedEntries.Where(entry => entry.Kind == PayloadEntryKind.File).Sum(entry => entry.Length), 1);
+            long completed = 0;
+            foreach (var entry in selectedEntries)
+            {
+                token.ThrowIfCancellationRequested();
+                var suffix = string.Equals(entry.RelativePath, selectedPath, StringComparison.OrdinalIgnoreCase)
+                    ? string.Empty
+                    : entry.RelativePath[selectedPath.Length..];
+                var stagingPath = PathSafety.GetSafeDestination(staging.PayloadDirectory, name + suffix);
+                if (entry.Kind == PayloadEntryKind.Directory)
+                {
+                    Directory.CreateDirectory(stagingPath);
+                    directoryTimes.Add((stagingPath, entry.LastWriteUtcTicks));
+                    continue;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(stagingPath)!);
+                await using var output = new FileStream(
+                    stagingPath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    IndexedPayloadContainer.BlockSize,
+                    FileOptions.Asynchronous | FileOptions.WriteThrough);
+                await CopyEntryAsync(entry, output, token).ConfigureAwait(false);
+                await output.FlushAsync(token).ConfigureAwait(false);
+                File.SetLastWriteTimeUtc(stagingPath, DateTime.SpecifyKind(new DateTime(entry.LastWriteUtcTicks), DateTimeKind.Utc));
+                completed = checked(completed + entry.Length);
+                progress?.Report(new CryptoProgress(CryptoStage.Decrypting, completed, totalBytes, $"正在导出：{entry.RelativePath}"));
+            }
+
+            for (var index = directoryTimes.Count - 1; index >= 0; index--)
+            {
+                var directory = directoryTimes[index];
+                Directory.SetLastWriteTimeUtc(directory.Path, new DateTime(directory.Ticks, DateTimeKind.Utc));
+            }
+
+            token.ThrowIfCancellationRequested();
+            var stagedRoot = PathSafety.GetSafeDestination(staging.PayloadDirectory, name);
+            if (selectedIsDirectory ? !Directory.Exists(stagedRoot) : !File.Exists(stagedRoot))
+            {
+                throw new NingRanException("导出的内容不完整，未找到文件或文件夹。");
+            }
+
+            var finalPath = PathSafety.GetUniquePath(Path.Combine(destination, name));
+            progress?.Report(new CryptoProgress(CryptoStage.Finalizing, totalBytes, totalBytes, "正在完成导出…"));
+            if (selectedIsDirectory) Directory.Move(stagedRoot, finalPath);
+            else File.Move(stagedRoot, finalPath);
+            staging.MarkPayloadMoved();
+            staging.TryCleanup(out _);
+            return new DecryptionResult(finalPath, selectedIsDirectory, VerifiedSenderName);
+        }
+        catch (Exception exception)
+        {
+            if (!staging.TryCleanup(out var cleanupError))
+            {
+                throw new NingRanException(
+                    "导出没有完成，而且临时明文未能自动删除。请关闭程序并重新打开，让程序再次尝试安全清理。",
+                    new AggregateException(exception, cleanupError!));
+            }
+
+            throw;
+        }
+    }
+
     internal async Task ReadEntryBlockAsync(
         IndexedPayloadContainer.IndexedPayloadEntry entry,
         long blockOffset,
@@ -230,6 +340,53 @@ public sealed class SecureArchiveSession : IDisposable
         return new ChaCha20Poly1305(_dataKey!);
     }
 
+    internal async Task ValidateAsync(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
+        await IndexedPayloadContainer.ValidateAllAsync(_input, _header, _dataKey!, _payload, null, linked.Token)
+            .ConfigureAwait(false);
+    }
+
+    internal PayloadManifest CreateRebuildManifest(
+        IReadOnlySet<string> pathsToRemove,
+        IReadOnlyList<(PayloadManifest Manifest, string TargetDirectory, string? TargetName)> additions,
+        SizePaddingMode sizePadding)
+    {
+        ThrowIfDisposed();
+        var entries = new List<PayloadEntry>();
+        foreach (var original in _payload.Entries)
+        {
+            if (pathsToRemove.Any(path => string.Equals(original.RelativePath, path, StringComparison.OrdinalIgnoreCase) ||
+                                          original.RelativePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var path = original.RelativePath;
+            entries.Add(new PayloadEntry(original.Kind, path, path, original.Length, original.LastWriteUtcTicks,
+                default, null,
+                original.Kind == PayloadEntryKind.File
+                    ? cancellationToken => new ValueTask<Stream>(OpenEntryReadStream(path))
+                    : null));
+        }
+
+        foreach (var (manifest, targetDirectory, targetName) in additions)
+        {
+            var target = PathSafety.NormalizeRelativePath(targetDirectory);
+            var destinationRoot = PathSafety.NormalizeRelativePath(target + "/" +
+                PathSafety.ValidateNameSegment(targetName ?? manifest.RootName));
+            foreach (var entry in manifest.Entries)
+            {
+                var suffix = entry.RelativePath[manifest.RootName.Length..];
+                var destination = PathSafety.NormalizeRelativePath(destinationRoot + suffix);
+                entries.Add(entry with { RelativePath = destination });
+            }
+        }
+
+        return PayloadManifest.Create(IsDirectory, RootName, entries, sizePadding);
+    }
+
     private async Task CopyEntryAsync(
         IndexedPayloadContainer.IndexedPayloadEntry entry,
         Stream output,
@@ -249,10 +406,21 @@ public sealed class SecureArchiveSession : IDisposable
 
     private IndexedPayloadContainer.IndexedPayloadEntry GetFileEntry(string relativePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
-        if (!_entries.TryGetValue(relativePath, out var entry) || entry.Kind != PayloadEntryKind.File)
+        var entry = GetArchiveEntry(relativePath);
+        if (entry.Kind != PayloadEntryKind.File)
         {
             throw new NingRanException("未找到要打开的普通文件。");
+        }
+
+        return entry;
+    }
+
+    private IndexedPayloadContainer.IndexedPayloadEntry GetArchiveEntry(string relativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        if (!_entries.TryGetValue(relativePath, out var entry))
+        {
+            throw new NingRanException("未找到要导出的文件或文件夹。");
         }
 
         return entry;
@@ -275,6 +443,7 @@ public sealed class SecureArchiveSession : IDisposable
             CryptographicOperations.ZeroMemory(_dataKey);
             _dataKey = null;
         }
+        _dataKeyMemory.Dispose();
 
         CryptographicOperations.ZeroMemory(_header.Bytes);
         CryptographicOperations.ZeroMemory(_header.PayloadNoncePrefix);

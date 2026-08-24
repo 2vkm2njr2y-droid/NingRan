@@ -43,6 +43,7 @@ public partial class SecureMediaViewerWindow : Window
     private bool _nativeSeeking;
     private DispatcherTimer? _nativePreviewTimer;
     private DispatcherTimer? _nativePreviewTimeoutTimer;
+    private DispatcherTimer? _nativeVideoClickTimer;
     private long _nativePreviewRequestedTime = -1;
     private double _nativeVideoAspect = 16d / 9d;
     private bool _nativeHasPlayedFrame;
@@ -51,12 +52,16 @@ public partial class SecureMediaViewerWindow : Window
     private bool _nativePreviewViewReady;
     private CursorPosition _lastNativeCursorPosition;
     private bool _hasLastNativeCursorPosition;
+    private bool _isDraggingImage;
+    private Point _imageDragStart;
+    private Point _imageTranslateStart;
 
     private const int WmKeyDown = 0x0100;
     private const int WmSysKeyDown = 0x0104;
     private const int WmMouseMove = 0x0200;
     private const int VirtualKeyLeft = 0x25;
     private const int VirtualKeyRight = 0x27;
+    private const int VirtualKeyEscape = 0x1B;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct CursorPosition
@@ -68,6 +73,9 @@ public partial class SecureMediaViewerWindow : Window
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out CursorPosition position);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
 
     public SecureMediaViewerWindow(SecureArchiveSession session, IReadOnlyList<SecureArchiveEntry> folderEntries, SecureArchiveEntry initialEntry)
     {
@@ -88,6 +96,7 @@ public partial class SecureMediaViewerWindow : Window
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        DockNativeControlBar();
         ApplyFilter();
         try { EnsureNativePlayer(); }
         catch (Exception exception) { EmptyText.Text = $"内置播放器无法启动：{exception.Message}"; return; }
@@ -178,7 +187,7 @@ public partial class SecureMediaViewerWindow : Window
         image.EndInit();
         image.Freeze();
         ImageView.Source = image;
-        ImageZoomSlider.Value = 1;
+        ResetImageView();
         ImageScroll.Visibility = Visibility.Visible;
         ImageZoomPanel.Visibility = Visibility.Visible;
     }
@@ -227,6 +236,22 @@ public partial class SecureMediaViewerWindow : Window
         catch (Exception exception) { EmptyText.Text = $"内置播放器无法启动：{exception.Message}"; }
     }
 
+    private void DockNativeControlBar()
+    {
+        // XAML 中控制栏需要先作为 VideoView 的覆盖层创建；窗口就绪后把它移到
+        // 播放区的独立底部行，避免在普通窗口模式遮住视频画面。
+        if (VisualTreeHelper.GetParent(NativeMediaControlBar) is not Panel overlay) return;
+        overlay.Children.Remove(NativeMediaControlBar);
+        NativeMediaHost.RowDefinitions.Clear();
+        NativeMediaHost.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        NativeMediaHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(NativeMediaPresentation, 0);
+        NativeMediaHost.Children.Add(NativeMediaControlBar);
+        Grid.SetRow(NativeMediaControlBar, 1);
+        NativeMediaControlBar.SizeChanged += (_, _) => UpdateNativePresentationBounds();
+        Dispatcher.BeginInvoke(UpdateNativePresentationBounds, DispatcherPriority.Loaded);
+    }
+
     private void EnsureNativePlayer()
     {
         if (_nativePlayer is not null) return;
@@ -260,6 +285,7 @@ public partial class SecureMediaViewerWindow : Window
 
     private void StopNativePlayback()
     {
+        _nativeVideoClickTimer?.Stop();
         _nativeHideTimer?.Stop();
         _nativePreviewTimer?.Stop();
         _nativeSeeking = false;
@@ -507,7 +533,12 @@ public partial class SecureMediaViewerWindow : Window
         if (_nativePlayer is not null) _nativePlayer.Volume = (int)Math.Round(e.NewValue);
     }
 
-    private void NativeFullscreen_Click(object sender, RoutedEventArgs e) => SetMediaFullscreen(!_mediaFullscreen);
+    private void NativeFullscreen_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mediaFullscreen) LeaveMediaFullscreen();
+        else SetMediaFullscreen(true);
+        e.Handled = true;
+    }
 
     private void Viewer_PreviewMouseMove(object sender, MouseEventArgs e) => RevealNativeControlsFromPointer();
 
@@ -520,11 +551,48 @@ public partial class SecureMediaViewerWindow : Window
     private void NativeMediaOverlay_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         NativeMediaHost.Focus();
-        if (e.ClickCount == 2) SetMediaFullscreen(!_mediaFullscreen);
+        if (e.ClickCount == 2)
+        {
+            _nativeVideoClickTimer?.Stop();
+            if (_mediaFullscreen) LeaveMediaFullscreen();
+            else SetMediaFullscreen(true);
+            e.Handled = true;
+            return;
+        }
+
+        if (_currentEntry?.MediaKind == SecureMediaKind.Video && _nativePlayer is not null)
+        {
+            QueueNativeVideoClick();
+            e.Handled = true;
+        }
+    }
+
+    private void QueueNativeVideoClick()
+    {
+        _nativeVideoClickTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(GetDoubleClickTime()) };
+        _nativeVideoClickTimer.Tick -= NativeVideoClickTimer_Tick;
+        _nativeVideoClickTimer.Tick += NativeVideoClickTimer_Tick;
+        _nativeVideoClickTimer.Stop();
+        _nativeVideoClickTimer.Start();
+    }
+
+    private void NativeVideoClickTimer_Tick(object? sender, EventArgs e)
+    {
+        _nativeVideoClickTimer?.Stop();
+        if (_currentEntry?.MediaKind != SecureMediaKind.Video || _nativePlayer is null) return;
+        if (_nativePlayer.IsPlaying) _nativePlayer.Pause();
+        else _nativePlayer.Play();
+        RevealNativeControls();
     }
 
     private void NativeMediaHost_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && _mediaFullscreen)
+        {
+            LeaveMediaFullscreen();
+            e.Handled = true;
+            return;
+        }
         if (TrySeekWithKeyboard(e.Key)) e.Handled = true;
     }
 
@@ -571,7 +639,9 @@ public partial class SecureMediaViewerWindow : Window
     private void UpdateNativePresentationBounds()
     {
         var hostWidth = NativeMediaHost.ActualWidth;
-        var hostHeight = NativeMediaHost.ActualHeight;
+        var hostHeight = NativeMediaHost.RowDefinitions.Count > 0
+            ? NativeMediaHost.RowDefinitions[0].ActualHeight
+            : NativeMediaHost.ActualHeight;
         if (hostWidth <= 0 || hostHeight <= 0 || _nativeVideoAspect <= 0) return;
 
         var width = hostWidth;
@@ -623,9 +693,21 @@ public partial class SecureMediaViewerWindow : Window
             return;
         }
 
-        NativeMediaControlBar.IsHitTestVisible = visible;
-        NativeMediaControlBar.BeginAnimation(OpacityProperty, new DoubleAnimation(visible ? 1 : 0,
-            TimeSpan.FromMilliseconds(visible ? 160 : 240)));
+        if (visible)
+        {
+            NativeMediaControlBar.IsHitTestVisible = true;
+            NativeMediaControlBar.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(1, TimeSpan.FromMilliseconds(160)));
+        }
+        else
+        {
+            var hideAnimation = new DoubleAnimation(0, TimeSpan.FromMilliseconds(240));
+            hideAnimation.Completed += (_, _) =>
+            {
+                if (NativeMediaControlBar.Opacity < 0.01) NativeMediaControlBar.IsHitTestVisible = false;
+            };
+            NativeMediaControlBar.BeginAnimation(OpacityProperty, hideAnimation);
+        }
         NativeMediaHint.BeginAnimation(OpacityProperty, new DoubleAnimation(visible ? 0.76 : 0,
             TimeSpan.FromMilliseconds(visible ? 160 : 240)));
     }
@@ -633,14 +715,24 @@ public partial class SecureMediaViewerWindow : Window
     private void NativeProgressSlider_PreviewMouseMove(object sender, MouseEventArgs e)
     {
         if (_nativePlayer?.Length is not > 0) return;
+        // 首次悬停时也先取得控制栏的最终位置，避免预览框完成布局后再次向下跳动。
+        NativeMediaHost.UpdateLayout();
+        NativePreviewPopup.Visibility = Visibility.Visible;
         var point = e.GetPosition(NativeProgressSlider);
         var fraction = Math.Clamp(point.X / Math.Max(1, NativeProgressSlider.ActualWidth), 0, 1);
-        var sliderOrigin = NativeProgressSlider.TransformToAncestor(NativeMediaOverlay).Transform(new Point(0, 0));
-        var popupLeft = Math.Clamp(sliderOrigin.X + point.X - NativePreviewPopup.Width / 2, 8,
+        // 控制栏位于播放区下方，已经不是预览层的子元素；通过屏幕坐标转换，
+        // 避免直接向旧的父元素换算位置而引发窗口异常。
+        var overlayPoint = NativeMediaOverlay.PointFromScreen(NativeProgressSlider.PointToScreen(point));
+        var popupLeft = Math.Clamp(overlayPoint.X - NativePreviewPopup.Width / 2, 8,
             Math.Max(8, NativeMediaOverlay.ActualWidth - NativePreviewPopup.Width - 8));
-        NativePreviewPopup.Margin = new Thickness(popupLeft, 0, 0, 108);
+        // 预览始终贴在独立控制栏上方；不再以视频画面底部为基准，避免出现大块空白。
+        var controlBarTop = NativeMediaOverlay.PointFromScreen(
+            NativeMediaControlBar.PointToScreen(new Point(0, 0))).Y;
+        var popupHeight = NativePreviewPopup.Height;
+        var popupTop = Math.Max(8, controlBarTop - popupHeight - 10);
+        NativePreviewPopup.VerticalAlignment = VerticalAlignment.Top;
+        NativePreviewPopup.Margin = new Thickness(popupLeft, popupTop, 0, 0);
         NativePreviewTime.Text = FormatMediaTime((long)(_nativePlayer.Length * fraction));
-        NativePreviewPopup.Visibility = Visibility.Visible;
         RequestNativePreview((long)(_nativePlayer.Length * fraction));
         RevealNativeControls();
     }
@@ -701,13 +793,27 @@ public partial class SecureMediaViewerWindow : Window
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && _mediaFullscreen)
+        {
+            LeaveMediaFullscreen();
+            e.Handled = true;
+            return;
+        }
         if (TrySeekWithKeyboard(e.Key)) e.Handled = true;
         base.OnPreviewKeyDown(e);
     }
 
     private void ViewerThreadPreprocessMessage(ref MSG msg, ref bool handled)
     {
-        if (_closing || !IsActive || !NativeMediaHost.IsVisible) return;
+        if (_closing) return;
+        if ((msg.message is WmKeyDown or WmSysKeyDown) &&
+            msg.wParam.ToInt64() == VirtualKeyEscape && _mediaFullscreen)
+        {
+            LeaveMediaFullscreen();
+            handled = true;
+            return;
+        }
+        if (!IsActive || !NativeMediaHost.IsVisible) return;
         if (msg.message == WmMouseMove)
         {
             RevealNativeControlsFromPointer();
@@ -719,8 +825,15 @@ public partial class SecureMediaViewerWindow : Window
         {
             VirtualKeyLeft => Key.Left,
             VirtualKeyRight => Key.Right,
+            VirtualKeyEscape => Key.Escape,
             _ => Key.None,
         };
+        if (key == Key.Escape && _mediaFullscreen)
+        {
+            LeaveMediaFullscreen();
+            handled = true;
+            return;
+        }
         if (key != Key.None && TrySeekWithKeyboard(key)) handled = true;
     }
 
@@ -734,11 +847,42 @@ public partial class SecureMediaViewerWindow : Window
 
     private void ImageScroll_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (_filteredEntries.Count < 2) return;
-        var atTop = ImageScroll.VerticalOffset <= 0;
-        var atBottom = ImageScroll.VerticalOffset >= ImageScroll.ScrollableHeight;
-        if (e.Delta > 0 && atTop) { MoveSelection(-1, false); e.Handled = true; }
-        else if (e.Delta < 0 && atBottom) { MoveSelection(1, false); e.Handled = true; }
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            ImageZoomSlider.Value = Math.Clamp(ImageZoomSlider.Value + (e.Delta > 0 ? 0.1 : -0.1),
+                ImageZoomSlider.Minimum, ImageZoomSlider.Maximum);
+            e.Handled = true;
+            return;
+        }
+        // 未按 Ctrl 时不改变图片位置，也不再显示滚动条。
+    }
+
+    private void ImageScroll_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (ImageZoomSlider.Value <= 1 || e.ChangedButton != MouseButton.Left) return;
+        _isDraggingImage = true;
+        _imageDragStart = e.GetPosition(ImageScroll);
+        _imageTranslateStart = new Point(ImageTranslate.X, ImageTranslate.Y);
+        ImageScroll.CaptureMouse();
+        Cursor = Cursors.SizeAll;
+        e.Handled = true;
+    }
+
+    private void ImageScroll_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingImage || e.LeftButton != MouseButtonState.Pressed) return;
+        var point = e.GetPosition(ImageScroll);
+        ImageTranslate.X = _imageTranslateStart.X + point.X - _imageDragStart.X;
+        ImageTranslate.Y = _imageTranslateStart.Y + point.Y - _imageDragStart.Y;
+    }
+
+    private void ImageScroll_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isDraggingImage) return;
+        _isDraggingImage = false;
+        ImageScroll.ReleaseMouseCapture();
+        Cursor = Cursors.Arrow;
+        e.Handled = true;
     }
 
     private void MoveSelection(int offset, bool loop)
@@ -757,10 +901,23 @@ public partial class SecureMediaViewerWindow : Window
 
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => ImageZoomSlider.Value = Math.Max(ImageZoomSlider.Minimum, ImageZoomSlider.Value - 0.2);
     private void ZoomIn_Click(object sender, RoutedEventArgs e) => ImageZoomSlider.Value = Math.Min(ImageZoomSlider.Maximum, ImageZoomSlider.Value + 0.2);
+    private void ImageZoomReset_Click(object sender, RoutedEventArgs e) => ResetImageView();
     private void ImageZoomSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         ImageScale.ScaleX = e.NewValue;
         ImageScale.ScaleY = e.NewValue;
+        if (e.NewValue <= 1)
+        {
+            ImageTranslate.X = 0;
+            ImageTranslate.Y = 0;
+        }
+    }
+
+    private void ResetImageView()
+    {
+        ImageZoomSlider.Value = 1;
+        ImageTranslate.X = 0;
+        ImageTranslate.Y = 0;
     }
 
     private void HideContentViews()

@@ -9,10 +9,10 @@ public partial class ProgressWindow : Window
 {
     private bool _allowClose;
 
-    public ProgressWindow(bool isEncrypting)
+    public ProgressWindow(bool isEncrypting, string? operationTitle = null)
     {
         InitializeComponent();
-        TitleText.Text = isEncrypting ? "正在加密并验证" : "正在验证并解密";
+        TitleText.Text = operationTitle ?? (isEncrypting ? "正在加密并验证" : "正在验证并解密");
     }
 
     public event EventHandler? CancelRequested;

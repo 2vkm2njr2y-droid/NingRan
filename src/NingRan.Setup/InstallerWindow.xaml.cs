@@ -225,7 +225,7 @@ public partial class InstallerWindow : Window
         ShowStage(InstallerStage.Progress);
         try
         {
-            await Task.Run(() => _engine.PrepareUninstall(
+            _ = await Task.Run(() => _engine.PrepareUninstall(
                 _uninstallPath ?? throw new InvalidOperationException("无法确定卸载位置。"),
                 deleteUserData));
             CleanupScheduler.ScheduleInstalledDirectoryCleanup(_uninstallPath!);
@@ -254,11 +254,14 @@ public partial class InstallerWindow : Window
         {
             try
             {
+                var explorer = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    "explorer.exe");
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = _installedExecutable,
+                    FileName = explorer,
                     UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(_installedExecutable),
+                    Arguments = $"\"{_installedExecutable}\"",
                 })?.Dispose();
             }
             catch (Exception exception)

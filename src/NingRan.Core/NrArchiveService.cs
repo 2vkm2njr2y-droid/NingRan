@@ -607,7 +607,8 @@ public sealed class NrArchiveService
                 payload,
                 physicalUnlock,
                 physicalMonitor,
-                senderName);
+                senderName,
+                archivePath);
             input = null;
             header = null;
             dataKey = null;
@@ -639,6 +640,183 @@ public sealed class NrArchiveService
         finally
         {
             keyFileSecret?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 将已验证的内容和新选择的内容重新写成一份全新的加密文件。
+    /// 旧数据密钥和随机数绝不复用，成功前原文件不会被替换。
+    /// </summary>
+    public async Task RebuildArchiveAsync(
+        SecureArchiveSession session,
+        ArchiveUpdateRequest request,
+        IProgress<CryptoProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
+
+        var archivePath = Path.GetFullPath(request.ArchivePath);
+        if (!string.Equals(archivePath, session.ArchivePath, StringComparison.OrdinalIgnoreCase) || !File.Exists(archivePath))
+        {
+            throw new NingRanException("当前打开的加密文件已经变化，请关闭后重新打开再修改。");
+        }
+
+        if (!session.IsDirectory)
+        {
+            throw new NingRanException("当前加密文件保存的是单个文件，不能向其中追加内容。");
+        }
+
+        if (session.Mode == EncryptionMode.PhysicalDevice)
+        {
+            throw new NingRanException("物理设备模式暂不支持安全修改。请导出内容后重新加密，以免改变授权设备。");
+        }
+
+        if (request.Password.IsEmpty || request.SigningIdentityPassword.IsEmpty || string.IsNullOrWhiteSpace(request.SigningIdentityId))
+        {
+            throw new NingRanException("修改加密文件需要加密文件密码、发送者身份和身份密码。");
+        }
+
+        if (session.Mode == EncryptionMode.Advanced && (string.IsNullOrWhiteSpace(request.KeyFilePath) || !File.Exists(request.KeyFilePath)))
+        {
+            throw new NingRanException("高级模式修改时需要重新选择原来的密匙文件。");
+        }
+
+        var reporter = new ProgressReporter(progress);
+        var removePaths = new HashSet<string>(request.PathsToRemove.Select(PathSafety.NormalizeRelativePath), StringComparer.OrdinalIgnoreCase);
+        var additionManifests = new List<(PayloadManifest Manifest, string TargetDirectory, string? TargetName)>();
+        PayloadManifest? manifest = null;
+        KeyFileSecret? keyFileSecret = null;
+        SigningIdentity? signingIdentity = null;
+        ArchiveHeader? header = null;
+        byte[]? dataKey = null;
+        FileStream? temporaryFile = null;
+        Guid? temporaryRegistration = null;
+        var archiveDirectory = Path.GetDirectoryName(archivePath) ?? throw new NingRanException("加密文件位置不正确。");
+        var temporaryPath = Path.Combine(archiveDirectory, $".ningran-update-{Guid.NewGuid():N}.part");
+        try
+        {
+            reporter.Report(CryptoStage.Verifying, 0, 1, "正在验证当前加密内容…");
+            await session.ValidateAsync(cancellationToken).ConfigureAwait(false);
+
+            foreach (var addition in request.Additions)
+            {
+                if (string.IsNullOrWhiteSpace(addition.SourcePath) || string.IsNullOrWhiteSpace(addition.TargetDirectoryRelativePath))
+                {
+                    throw new NingRanException("追加位置不正确。");
+                }
+
+                var target = PathSafety.NormalizeRelativePath(addition.TargetDirectoryRelativePath);
+                if (!session.Entries.Any(entry => entry.IsDirectory && string.Equals(entry.RelativePath, target, StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new NingRanException("追加目标文件夹已经不存在，请重新选择。");
+                }
+
+                additionManifests.Add((PayloadManifest.Build(addition.SourcePath, SizePaddingMode.None, cancellationToken), target,
+                    addition.TargetName));
+            }
+
+            manifest = session.CreateRebuildManifest(removePaths, additionManifests, SizePaddingMode.None);
+            additionManifests.Clear(); // 内容读取句柄的管理权已经交给合并后的清单。
+            var totalWork = Math.Max(manifest.TotalFileBytes * 2, 2);
+
+            if (session.Mode == EncryptionMode.Advanced)
+            {
+                reporter.Report(CryptoStage.DerivingKey, 0, totalWork, "正在读取并核验密匙文件…");
+                keyFileSecret = await _keyFileService.UnlockAsync(request.KeyFilePath!, request.Password, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            reporter.Report(CryptoStage.DerivingKey, 0, totalWork, "正在解锁发送者身份…");
+            signingIdentity = await _identityService.UnlockLocalIdentityAsync(
+                request.SigningIdentityId, request.SigningIdentityPassword, cancellationToken).ConfigureAwait(false);
+            var created = await ArchiveHeader.CreateAsync(
+                request.Password,
+                keyFileSecret?.Memory ?? ReadOnlyMemory<byte>.Empty,
+                session.Mode,
+                hideExactSize: false,
+                _kdfParameters,
+                cancellationToken).ConfigureAwait(false);
+            header = created.Header;
+            dataKey = created.DataKey;
+
+            using var directoryLock = WindowsFileSystemSafety.LockDirectoryPath(archiveDirectory);
+            temporaryFile = WindowsFileSystemSafety.CreateNewTemporaryFile(temporaryPath);
+            temporaryRegistration = TemporaryFileRegistry.Register(temporaryFile, temporaryPath);
+            await temporaryFile.WriteAsync(header.Bytes, cancellationToken).ConfigureAwait(false);
+            var indexedPayload = await IndexedPayloadContainer.WriteAsync(
+                temporaryFile, manifest, header, dataKey, signingIdentity,
+                (completed, message) => reporter.Report(CryptoStage.Encrypting, completed, totalWork, message),
+                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await temporaryFile.FlushAsync(cancellationToken).ConfigureAwait(false);
+                temporaryFile.Flush(flushToDisk: true);
+                reporter.Report(CryptoStage.Verifying, manifest.TotalFileBytes, totalWork, "正在验证更新后的加密文件…");
+                await IndexedPayloadContainer.ValidateAllAsync(
+                    temporaryFile, header, dataKey, indexedPayload,
+                    (completed, _) => reporter.Report(CryptoStage.Verifying,
+                        Math.Min(totalWork, manifest.TotalFileBytes + completed * IndexedPayloadContainer.BlockSize), totalWork,
+                        "正在验证更新后的内容…"), cancellationToken).ConfigureAwait(false);
+                VerifyCreatedIndexedPayloadIdentity(indexedPayload, signingIdentity);
+            }
+            finally
+            {
+                indexedPayload.Dispose();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            reporter.Report(CryptoStage.Finalizing, totalWork, totalWork, "正在安全替换原加密文件…");
+            temporaryFile.Dispose();
+            temporaryFile = null;
+            session.Dispose(); // 只在新文件完整验证通过后才释放旧文件的独占锁。
+            var backupPath = Path.Combine(archiveDirectory, $".ningran-update-backup-{Guid.NewGuid():N}.bak");
+            try
+            {
+                File.Replace(temporaryPath, archivePath, backupPath, ignoreMetadataErrors: true);
+                TryDeleteFile(backupPath);
+            }
+            catch
+            {
+                // File.Replace 失败时原文件仍在；临时文件会在 finally 中清理。
+                throw;
+            }
+
+            TemporaryFileRegistry.Unregister(temporaryRegistration);
+            reporter.Report(CryptoStage.Finalizing, totalWork, totalWork, "加密文件已更新并重新签名。");
+        }
+        catch (Exception exception) when (exception is not NingRanException and not OperationCanceledException)
+        {
+            throw new NingRanException("修改加密文件时发生错误，原文件没有被替换。", exception);
+        }
+        finally
+        {
+            if (temporaryFile is not null)
+            {
+                TryDeleteTemporaryFile(ref temporaryFile, temporaryPath);
+            }
+            else if (File.Exists(temporaryPath))
+            {
+                TryDeleteFile(temporaryPath);
+            }
+
+            TemporaryFileRegistry.Unregister(temporaryRegistration);
+            manifest?.Dispose();
+            foreach (var (addition, _, _) in additionManifests)
+            {
+                addition.Dispose();
+            }
+
+            keyFileSecret?.Dispose();
+            signingIdentity?.Dispose();
+            if (dataKey is not null) CryptographicOperations.ZeroMemory(dataKey);
+            if (header is not null)
+            {
+                CryptographicOperations.ZeroMemory(header.Bytes);
+                CryptographicOperations.ZeroMemory(header.PayloadNoncePrefix);
+                CryptographicOperations.ZeroMemory(header.HeaderHash);
+            }
         }
     }
 
@@ -695,7 +873,7 @@ public sealed class NrArchiveService
         {
             var current = currentManifest.Entries[index];
             var original = result.SourceSnapshot[index];
-            current.SourceHandle.Dispose();
+            current.SourceHandle!.Dispose();
             if (index == 0)
             {
                 BeforeVerifiedSourceDeleteForTesting?.Invoke();
@@ -762,11 +940,14 @@ public sealed class NrArchiveService
             if (entry.Kind == PayloadEntryKind.Directory)
             {
                 Directory.CreateDirectory(destination);
+                WindowsFileSystemSafety.VerifyDirectoryChain(stagingDirectory, destination);
                 directoryTimes.Add((destination, entry.LastWriteUtcTicks));
                 continue;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            var parent = Path.GetDirectoryName(destination)!;
+            Directory.CreateDirectory(parent);
+            WindowsFileSystemSafety.VerifyDirectoryChain(stagingDirectory, parent);
             await using (var output = new FileStream(
                              destination,
                              FileMode.CreateNew,

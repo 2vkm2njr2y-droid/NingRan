@@ -5,10 +5,11 @@ namespace NingRan.MediaPlayer;
 
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        if (!PlayerOptions.TryParse(e.Args, out var options))
+        var token = await Console.In.ReadLineAsync().ConfigureAwait(true);
+        if (!PlayerOptions.TryParse(e.Args, token, out var options))
         {
             Shutdown(2);
             return;

@@ -9,30 +9,32 @@ internal static class CleanupScheduler
 {
     public static void ScheduleInstalledDirectoryCleanup(string installPath)
     {
-        var validated = SetupPathSafety.ValidateFixedInstallPath(installPath);
-        SetupPathSafety.VerifyInstallDirectoryPermissions(validated);
-        var uninstaller = Path.Combine(validated, SetupProduct.UninstallerName);
-        if (!File.Exists(uninstaller))
+        var validated = SetupPathSafety.ValidateUninstallPath(installPath);
+        if (SetupPathSafety.IsLegacyInstallPath(validated))
+        {
+            SetupPathSafety.HardenLegacyInstallDirectory(validated);
+        }
+        else
+        {
+            SetupPathSafety.VerifyInstallDirectoryPermissions(validated);
+        }
+
+        if (!File.Exists(Path.Combine(validated, SetupProduct.UninstallerName)))
         {
             throw new InvalidOperationException("没有找到正在运行的卸载程序，无法安排最后清理。");
         }
 
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"NingRan-Cleanup-{Guid.NewGuid():N}.ps1");
+        var scriptPath = Path.Combine(validated, $".NingRan-Cleanup-{Guid.NewGuid():N}.ps1");
         const string script = """
             param(
                 [int]$WaitForProcessId,
-                [string]$UninstallerPath,
-                [string]$InstallDirectory,
-                [string]$CleanupScriptPath
+                [string]$InstallDirectory
             )
             Wait-Process -Id $WaitForProcessId -Timeout 120 -ErrorAction SilentlyContinue
-            for ($attempt = 0; $attempt -lt 20; $attempt++) {
-                Remove-Item -LiteralPath $UninstallerPath -Force -ErrorAction SilentlyContinue
-                if (-not (Test-Path -LiteralPath $UninstallerPath)) { break }
-                Start-Sleep -Milliseconds 250
-            }
-            Remove-Item -LiteralPath $InstallDirectory -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $CleanupScriptPath -Force -ErrorAction SilentlyContinue
+            $escapedDirectory = $InstallDirectory.Replace("'", "''")
+            $cleanupCommand = "`$target = '$escapedDirectory'; for (`$attempt = 0; `$attempt -lt 120; `$attempt++) { Remove-Item -LiteralPath `$target -Recurse -Force -ErrorAction SilentlyContinue; if (-not (Test-Path -LiteralPath `$target)) { foreach (`$regPath in @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\NingRan','HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\NingRan')) { `$recorded = (Get-ItemProperty -LiteralPath `$regPath -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation; if ([string]::Equals([string]`$recorded, `$target, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath `$regPath -Recurse -Force -ErrorAction SilentlyContinue } }; exit 0 }; Start-Sleep -Milliseconds 500 }"
+            $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanupCommand))
+            Start-Process -FilePath (Join-Path $PSHome 'powershell.exe') -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand) -WorkingDirectory $env:WINDIR -WindowStyle Hidden
             """;
         File.WriteAllText(scriptPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
 
@@ -58,9 +60,8 @@ internal static class CleanupScheduler
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(scriptPath);
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        startInfo.ArgumentList.Add(uninstaller);
         startInfo.ArgumentList.Add(validated);
-        startInfo.ArgumentList.Add(scriptPath);
-        Process.Start(startInfo)?.Dispose();
+        using var cleanupProcess = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Windows 未能启动最后清理程序，卸载记录将保留以便重试。");
     }
 }

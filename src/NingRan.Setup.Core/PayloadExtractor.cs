@@ -41,6 +41,7 @@ public static class PayloadExtractor
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                VerifyDirectoryChain(root, Path.GetDirectoryName(outputPath)!);
                 await using var source = entry.Open();
                 await using var output = new FileStream(
                     outputPath,
@@ -147,5 +148,28 @@ public static class PayloadExtractor
         }
 
         return outputPath;
+    }
+
+    private static void VerifyDirectoryChain(string root, string directory)
+    {
+        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var fullDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (!string.Equals(fullDirectory, fullRoot, StringComparison.OrdinalIgnoreCase) &&
+            !fullDirectory.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("安装包路径超出了安全目录范围。");
+        }
+
+        var current = fullRoot;
+        var relative = Path.GetRelativePath(fullRoot, fullDirectory);
+        if (relative == ".") return;
+        foreach (var part in relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidDataException("安装包试图通过快捷链接或目录联接写出安全目录。");
+            }
+        }
     }
 }

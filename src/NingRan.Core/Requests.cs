@@ -196,3 +196,44 @@ public sealed record DecryptionResult(
     string OutputPath,
     bool IsDirectory,
     string? VerifiedSenderName = null);
+
+/// <summary>对已安全打开的加密文件进行删除或追加所需的信息。</summary>
+public sealed class ArchiveUpdateRequest : IDisposable
+{
+    public ArchiveUpdateRequest(
+        string archivePath,
+        SensitivePassword password,
+        string signingIdentityId,
+        SensitivePassword signingIdentityPassword,
+        string? keyFilePath = null,
+        IReadOnlyList<string>? pathsToRemove = null,
+        IReadOnlyList<ArchiveAppendSource>? additions = null,
+        nint ownerWindowHandle = 0)
+    {
+        ArchivePath = archivePath;
+        Password = password;
+        SigningIdentityId = signingIdentityId;
+        SigningIdentityPassword = signingIdentityPassword;
+        KeyFilePath = keyFilePath;
+        PathsToRemove = pathsToRemove?.ToArray() ?? [];
+        Additions = additions?.ToArray() ?? [];
+        OwnerWindowHandle = ownerWindowHandle;
+    }
+
+    public string ArchivePath { get; }
+    public SensitivePassword Password { get; }
+    public string SigningIdentityId { get; }
+    public SensitivePassword SigningIdentityPassword { get; }
+    public string? KeyFilePath { get; }
+    public IReadOnlyList<string> PathsToRemove { get; }
+    public IReadOnlyList<ArchiveAppendSource> Additions { get; }
+    public nint OwnerWindowHandle { get; }
+
+    public void Dispose()
+    {
+        Password.Dispose();
+        SigningIdentityPassword.Dispose();
+    }
+}
+
+public sealed record ArchiveAppendSource(string SourcePath, string TargetDirectoryRelativePath, string? TargetName = null);

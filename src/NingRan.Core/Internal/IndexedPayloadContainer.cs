@@ -329,7 +329,9 @@ internal static class IndexedPayloadContainer
         Action<long, string>? progress,
         CancellationToken cancellationToken)
     {
-        await using var source = new FileStream(sourceEntry.SourceHandle, FileAccess.Read, BlockSize, isAsync: true);
+        await using var source = sourceEntry.ContentFactory is not null
+            ? await sourceEntry.ContentFactory(cancellationToken).ConfigureAwait(false)
+            : new FileStream(sourceEntry.SourceHandle ?? throw new NingRanException("缺少原始文件读取句柄。"), FileAccess.Read, BlockSize, isAsync: true);
         if (source.Length != sourceEntry.Length)
         {
             throw new NingRanException($"文件在准备后发生了变化：{sourceEntry.FullPath}");
@@ -363,7 +365,8 @@ internal static class IndexedPayloadContainer
                 progress?.Invoke(wanted, $"正在加密：{sourceEntry.RelativePath}");
             }
 
-            if (source.Length != sourceEntry.Length || File.GetLastWriteTimeUtc(sourceEntry.SourceHandle).Ticks != sourceEntry.LastWriteUtcTicks)
+            if (source.Length != sourceEntry.Length ||
+                (sourceEntry.ContentFactory is null && File.GetLastWriteTimeUtc(sourceEntry.SourceHandle!).Ticks != sourceEntry.LastWriteUtcTicks))
             {
                 throw new NingRanException($"文件在加密过程中发生了变化：{sourceEntry.FullPath}");
             }

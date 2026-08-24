@@ -55,6 +55,14 @@ public partial class MainWindow : Window
             trustedContactService: _trustedContactService,
             physicalDeviceProvider: _physicalDeviceService);
         _normalWindowEffect = WindowFrame.Effect;
+        if (_allowElevatedMediaBrowsing)
+        {
+            Title = "凝然加密 - 高安全查看";
+            EncryptRadio.IsEnabled = false;
+            DecryptRadio.IsChecked = true;
+            HighSecurityStatusText.Text = WindowsSecureExecution.GetStatus().Message +
+                " 高安全查看不接收普通窗口的密码或密匙，并限制导出和修改。";
+        }
         RefreshIdentityList();
         MigrateTrustedContactStorage();
         RefreshPhysicalDeviceList();
@@ -91,6 +99,15 @@ public partial class MainWindow : Window
 
     private IdentitySummary? SelectedSigningIdentity =>
         SigningIdentityCombo.SelectedItem as IdentitySummary;
+
+    private IdentitySummary? SelectedArchiveSigningIdentity =>
+        ArchiveSigningIdentityCombo.SelectedItem as IdentitySummary;
+
+    private void HelpButton_Click(object sender, RoutedEventArgs e)
+    {
+        var helpWindow = new HelpWindow { Owner = this };
+        helpWindow.Show();
+    }
 
     private async void PickFile_Click(object sender, RoutedEventArgs e)
     {
@@ -764,34 +781,6 @@ public partial class MainWindow : Window
 
         if (!IsEncrypting)
         {
-            if (!_allowElevatedMediaBrowsing)
-            {
-                var choice = MessageBox.Show(
-                    this,
-                    "选择打开方式：\n\n“是”：普通打开，播放期间独占锁定加密文件；\n“否”：严格防护，程序会关闭并以管理员权限重新打开，然后需要再次验证密码、密匙或物理设备。\n\n严格防护只用于本次安全查看，不会把密匙传给新进程。",
-                    "选择安全查看方式",
-                    MessageBoxButton.YesNoCancel,
-                    MessageBoxImage.Question,
-                    MessageBoxResult.Yes);
-                if (choice == MessageBoxResult.Cancel)
-                {
-                    return;
-                }
-
-                if (choice == MessageBoxResult.No)
-                {
-                    if (!await EnableStrictProtectionAsync())
-                    {
-                        MessageBox.Show(this, $"严格防护监控没有启动，因此没有打开安全内容。\n\n原因：{GetStrictProtectionFailureReason()}\n\n请在 Windows 提示中允许监控程序，或稍后重试。",
-                            AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
-                        return;
-                    }
-
-                    await OpenArchiveForBrowsingAsync(operationPassword);
-                    return;
-                }
-            }
-
             await OpenArchiveForBrowsingAsync(operationPassword);
             return;
         }
@@ -1048,7 +1037,7 @@ public partial class MainWindow : Window
         {
             var item = new TreeViewItem
             {
-                Header = entry.IsDirectory ? $"📁  {entry.Name}" : $"{GetUnlockedFileIcon(entry)}  {entry.Name}",
+                Header = CreateUnlockedFileHeader(entry.IsDirectory ? "📁" : GetUnlockedFileIcon(entry), entry.Name),
                 Tag = entry,
             };
             items[entry.RelativePath] = item;
@@ -1067,6 +1056,24 @@ public partial class MainWindow : Window
         {
             item.IsExpanded = true;
         }
+    }
+
+    private static FrameworkElement CreateUnlockedFileHeader(string icon, string name)
+    {
+        var header = new Grid { ToolTip = name };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.Children.Add(new TextBlock { Text = icon, Margin = new Thickness(0, 0, 6, 0) });
+        var nameText = new TextBlock
+        {
+            Text = name,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = name,
+        };
+        Grid.SetColumn(nameText, 1);
+        header.Children.Add(nameText);
+        return header;
     }
 
     private async void UnlockedFileTree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -1091,39 +1098,364 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dialog = new SaveFileDialog
+        await ExportUnlockedEntryAsync(entry);
+    }
+
+    private void UnlockedFileTree_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var item = FindVisualParent<TreeViewItem>(e.OriginalSource as DependencyObject);
+        if (item is not null)
         {
-            Title = "选择普通文件的导出位置",
-            FileName = entry.Name,
-            OverwritePrompt = false,
-            AddExtension = false,
-        };
-        if (dialog.ShowDialog(this) != true)
+            item.IsSelected = true;
+            item.Focus();
+        }
+    }
+
+    private void UnlockedFileTree_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        var selectedEntry = (UnlockedFileTree.SelectedItem as TreeViewItem)?.Tag as SecureArchiveEntry;
+        var canHandleEntry = selectedEntry is not null && !_allowElevatedMediaBrowsing;
+        var canDeleteEntry = canHandleEntry && _archiveSession is not null &&
+            !string.Equals(selectedEntry!.RelativePath, _archiveSession.RootName, StringComparison.OrdinalIgnoreCase);
+        if (UnlockedFileTree.ContextMenu is null)
         {
             return;
         }
 
+        var menuItems = UnlockedFileTree.ContextMenu.Items.OfType<MenuItem>().ToArray();
+        if (menuItems.Length > 0)
+        {
+            menuItems[0].IsEnabled = canHandleEntry;
+        }
+        if (menuItems.Length > 1)
+        {
+            menuItems[1].IsEnabled = canDeleteEntry;
+        }
+    }
+
+    private async void ExportUnlockedEntry_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_isBusy || _archiveSession is null ||
+            UnlockedFileTree.SelectedItem is not TreeViewItem { Tag: SecureArchiveEntry entry })
+        {
+            return;
+        }
+
+        await ExportUnlockedEntryAsync(entry);
+    }
+
+    private async Task ExportUnlockedEntryAsync(SecureArchiveEntry entry)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_archiveSession is null)
+        {
+            return;
+        }
+
+        string destinationDirectory;
+        string? outputName = null;
+        if (entry.IsDirectory)
+        {
+            var dialog = new OpenFolderDialog { Title = "选择解密文件夹副本的保存位置", Multiselect = false };
+            if (dialog.ShowDialog(this) != true) return;
+            destinationDirectory = dialog.FolderName;
+        }
+        else
+        {
+            var dialog = new SaveFileDialog
+            {
+                Title = "选择单独解密副本的保存位置",
+                FileName = entry.Name,
+                OverwritePrompt = false,
+                AddExtension = false,
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            destinationDirectory = Path.GetDirectoryName(dialog.FileName) ?? string.Empty;
+            outputName = Path.GetFileName(dialog.FileName);
+        }
+
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(isEncrypting: false) { Owner = this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
         try
         {
             SetBusy(true);
-            Mouse.OverrideCursor = Cursors.Wait;
-            await _archiveSession.ExportEntryAsync(entry.RelativePath, dialog.FileName);
-            MessageBox.Show(this, $"已导出明文文件：\n\n{dialog.FileName}", AppName,
+            _progressWindow.Show();
+            var result = await _archiveSession.ExportSelectionAsync(
+                entry.RelativePath,
+                destinationDirectory,
+                outputName,
+                progress,
+                _operationCancellation.Token);
+            CloseProgressWindow();
+            MessageBox.Show(this, $"已导出{(entry.IsDirectory ? "明文文件夹" : "明文文件")}：\n\n{result.OutputPath}", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            CloseProgressWindow();
+            MessageBox.Show(this, "导出已取消，未完成的临时明文已经清理。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
         {
-            ShowFriendlyError("无法导出文件", exception);
+            CloseProgressWindow();
+            ShowFriendlyError(entry.IsDirectory ? "无法导出文件夹" : "无法导出文件", exception);
         }
         finally
         {
-            Mouse.OverrideCursor = null;
+            CloseProgressWindow();
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
             SetBusy(false);
         }
     }
 
+    private async void DeleteUnlockedEntry_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_isBusy || _archiveSession is null ||
+            UnlockedFileTree.SelectedItem is not TreeViewItem { Tag: SecureArchiveEntry entry })
+        {
+            return;
+        }
+
+        if (string.Equals(entry.RelativePath, _archiveSession.RootName, StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this, "加密文件最外层的根内容必须保留。请选择其中的文件或文件夹进行删除。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var affectedEntries = _archiveSession.Entries
+            .Where(candidate => string.Equals(candidate.RelativePath, entry.RelativePath, StringComparison.OrdinalIgnoreCase) ||
+                                entry.IsDirectory && candidate.RelativePath.StartsWith(entry.RelativePath + "/", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var fileCount = affectedEntries.Count(candidate => !candidate.IsDirectory);
+        var totalBytes = affectedEntries.Where(candidate => !candidate.IsDirectory).Sum(candidate => candidate.Length);
+        var targetDescription = entry.IsDirectory
+            ? $"文件夹：{entry.RelativePath}\n包含：{fileCount:N0} 个文件，共 {FormatByteSize(totalBytes)}"
+            : $"文件：{entry.RelativePath}\n大小：{FormatByteSize(entry.Length)}";
+        var confirmation = MessageBox.Show(this,
+            $"确定要从加密文件中永久删除以下内容吗？\n\n{targetDescription}\n\n删除后无法恢复。",
+            "确认从加密文件中删除", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        await UpdateUnlockedArchiveAsync([entry.RelativePath], []);
+    }
+
+    private async void AppendFilesToUnlocked_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_isBusy || _archiveSession is null ||
+            UnlockedFileTree.SelectedItem is not TreeViewItem { Tag: SecureArchiveEntry { IsDirectory: true } target })
+        {
+            MessageBox.Show(this, "请先在文件树中选中要放入内容的文件夹，再点击“追加文件”。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var type = MessageBox.Show(this,
+            "请选择要追加的内容：\n\n“是”：选择一个或多个文件\n“否”：选择一个文件夹\n“取消”：不追加",
+            "追加文件", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        if (type == MessageBoxResult.Cancel)
+        {
+            return;
+        }
+
+        var sourcePaths = new List<string>();
+        if (type == MessageBoxResult.Yes)
+        {
+            var dialog = new OpenFileDialog { Title = "选择要追加的文件", Multiselect = true, CheckFileExists = true };
+            if (dialog.ShowDialog(this) != true) return;
+            sourcePaths.AddRange(dialog.FileNames.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+        else
+        {
+            var dialog = new OpenFolderDialog { Title = "选择要追加的文件夹", Multiselect = false };
+            if (dialog.ShowDialog(this) != true) return;
+            sourcePaths.Add(dialog.FolderName);
+        }
+
+        var existingPaths = _archiveSession.Entries.Select(entry => entry.RelativePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removals = new List<string>();
+        var additions = new List<ArchiveAppendSource>();
+        foreach (var sourcePath in sourcePaths)
+        {
+            var name = File.Exists(sourcePath) ? new FileInfo(sourcePath).Name : new DirectoryInfo(sourcePath).Name;
+            var desiredPath = target.RelativePath + "/" + name;
+            var existing = _archiveSession.Entries.FirstOrDefault(entry =>
+                string.Equals(entry.RelativePath, desiredPath, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null || existingPaths.Contains(desiredPath))
+            {
+                var choice = ArchiveConflictDialog.Show(this, name, existing?.Length ?? 0, GetSourceSize(sourcePath));
+                if (choice == ArchiveConflictChoice.Cancel)
+                {
+                    return;
+                }
+
+                if (choice == ArchiveConflictChoice.Replace)
+                {
+                    if (existing is not null) removals.Add(existing.RelativePath);
+                }
+                else
+                {
+                    name = GetUniqueArchiveChildName(target.RelativePath, name, existingPaths);
+                    desiredPath = target.RelativePath + "/" + name;
+                }
+            }
+
+            existingPaths.Add(desiredPath);
+            additions.Add(new ArchiveAppendSource(sourcePath, target.RelativePath, name));
+        }
+
+        if (additions.Count > 0)
+        {
+            await UpdateUnlockedArchiveAsync(removals, additions);
+        }
+    }
+
+    private async Task UpdateUnlockedArchiveAsync(IReadOnlyList<string> removals, IReadOnlyList<ArchiveAppendSource> additions)
+    {
+        if (_archiveSession is null || _sourcePath is null)
+        {
+            return;
+        }
+
+        if (SelectedArchiveSigningIdentity is not { } identity)
+        {
+            MessageBox.Show(this, "请选择修改后使用的发送者身份。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        using var archivePassword = ReadPassword(ArchivePasswordInput);
+        using var signingPassword = ReadPassword(ArchiveSigningIdentityPasswordInput);
+        if (archivePassword.IsEmpty || signingPassword.IsEmpty)
+        {
+            MessageBox.Show(this, "修改前请填写加密文件密码和修改后发送者身份密码。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        using var request = new ArchiveUpdateRequest(
+            _sourcePath,
+            archivePassword,
+            identity.Id,
+            signingPassword,
+            CurrentKeyFilePath,
+            removals,
+            additions,
+            new WindowInteropHelper(this).Handle);
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(isEncrypting: true, operationTitle: "正在更新加密文件") { Owner = this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
+        try
+        {
+            SetBusy(true);
+            _progressWindow.Show();
+            await _archiveService.RebuildArchiveAsync(_archiveSession, request, progress, _operationCancellation.Token);
+            CloseProgressWindow();
+            CloseArchiveSession();
+            using var reopenPassword = ReadPassword(ArchivePasswordInput);
+            await OpenArchiveForBrowsingAsync(reopenPassword);
+            if (_archiveSession is null)
+            {
+                return;
+            }
+            ArchiveSigningIdentityPasswordInput.Clear();
+            MessageBox.Show(this, "加密文件已更新，并已使用所选发送者身份重新签名。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            CloseProgressWindow();
+            MessageBox.Show(this, "修改已取消，原加密文件没有变动。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            CloseProgressWindow();
+            if (_archiveSession is { IsOpen: false })
+            {
+                CloseArchiveSession();
+            }
+            ShowFriendlyError("无法更新加密文件", exception);
+        }
+        finally
+        {
+            CloseProgressWindow();
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
+            SetBusy(false);
+        }
+    }
+
+    private static long GetSourceSize(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) return new FileInfo(path).Length;
+            return Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                .Aggregate(0L, (total, file) => checked(total + new FileInfo(file).Length));
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static string GetUniqueArchiveChildName(string parentPath, string name, IReadOnlySet<string> existingPaths)
+    {
+        var extension = Path.GetExtension(name);
+        var baseName = extension.Length == 0 ? name : name[..^extension.Length];
+        for (var index = 2; ; index++)
+        {
+            var candidate = $"{baseName} ({index}){extension}";
+            if (!existingPaths.Contains(parentPath + "/" + candidate)) return candidate;
+        }
+    }
+
+    private static T? FindVisualParent<T>(DependencyObject? source) where T : DependencyObject
+    {
+        while (source is not null)
+        {
+            if (source is T found) return found;
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return null;
+    }
+
     private async void ExportAllUnlocked_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
         if (_isBusy || _archiveSession is null)
         {
             return;
@@ -1303,8 +1635,8 @@ public partial class MainWindow : Window
                 ? "已停止当前操作，并已执行临时明文清理。"
                 : $"已停止当前操作；有 {cleanup.Failures.Count} 项临时内容将由下次启动继续清理。";
             MessageBox.Show(this,
-                $"严格防护发现未允许的软件尝试读取受保护内存：\n\n访问程序：{processName}\n被访问组件：{alert.TargetComponent}\n\n{cleanupResult}\n事件已记录到安全日志。",
-                "严格防护已介入", MessageBoxButton.OK, MessageBoxImage.Warning);
+                $"严格防护发现未允许的软件仍持有受保护内存读取权限：\n\n访问程序：{processName}\n被访问组件：{alert.TargetComponent}\n\n{cleanupResult}\n事件已记录到安全日志。此功能用于发现和缩短风险，不能保证拦截一次极短的读取。",
+                "严格防护已执行清理", MessageBoxButton.OK, MessageBoxImage.Warning);
             RefreshStrictProtectionButton();
         });
     }
@@ -1318,10 +1650,10 @@ public partial class MainWindow : Window
 
         StrictProtectionButton.Content = _strictProtection.IsRunning ? "严格防护：已开启" : "严格防护";
         StrictProtectionButton.ToolTip = _strictProtection.IsRunning
-            ? "严格防护监控正在运行"
+            ? "严格防护监控正在运行：发现后会停止操作并清理"
             : _strictProtectionSettings.Enabled
                 ? "严格防护已记住，但本次监控尚未启动"
-                : "设置严格防护和允许的软件";
+                : "设置严格防护监控和允许的软件";
     }
 
     private void CloseArchiveSession()
@@ -1537,11 +1869,56 @@ public partial class MainWindow : Window
             : IsEncrypting ? "开始加密" : "打开安全内容";
         RunButton.Visibility = archiveUnlocked ? Visibility.Collapsed : Visibility.Visible;
         RunButton.IsEnabled = !archiveUnlocked && (IsEncrypting || _detectedArchiveInfo.HasSenderSignature);
+        HighSecurityOpenButton.Visibility = !archiveUnlocked && !IsEncrypting && !_allowElevatedMediaBrowsing &&
+            _detectedArchiveInfo.HasSenderSignature ? Visibility.Visible : Visibility.Collapsed;
+        HighSecurityStatusText.Visibility = _allowElevatedMediaBrowsing ? Visibility.Visible : Visibility.Collapsed;
+        ArchiveEditingPanel.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
+        ExportAllUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
+        AppendFilesToUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    private void HighSecurityOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || string.IsNullOrWhiteSpace(_sourcePath) || !File.Exists(_sourcePath) ||
+            !string.Equals(Path.GetExtension(_sourcePath), ".nrenc", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this, "请先选择一个可打开的凝然加密文件。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var result = MessageBox.Show(this,
+            "高安全打开会启动一个单独的管理员窗口。该窗口不会接收当前输入的密码或密匙，您需要重新验证；它仅用于程序内查看，不能导出或修改文件。\n\n它不是 Windows 最高级受保护进程，不能防止同一 Windows 账户下已能读取其他程序内存的软件。\n\n继续吗？",
+            "高安全打开", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            ClearPasswords();
+            HighSecurityLaunch.Start(_sourcePath);
+        }
+        catch (Exception exception) when (HighSecurityLaunch.WasCancelled(exception))
+        {
+            MessageBox.Show(this, "未获得 Windows 管理员确认，高安全查看没有启动。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            ShowFriendlyError("无法启动高安全查看", exception);
+        }
+    }
+
+    private void ShowHighSecurityViewingOnlyMessage() => MessageBox.Show(this,
+        "高安全查看只允许在程序内查看内容，不能导出、删除或修改文件。请关闭高安全查看后，在普通窗口中执行这些操作。",
+        "高安全查看", MessageBoxButton.OK, MessageBoxImage.Information);
 
     private void RefreshIdentityList(string? selectIdentityId = null)
     {
         var selectedId = selectIdentityId ?? SelectedSigningIdentity?.Id;
+        var archiveSelectedId = selectIdentityId ?? SelectedArchiveSigningIdentity?.Id ?? selectedId;
         try
         {
             var identities = _identityService.ListLocalIdentities();
@@ -1552,10 +1929,19 @@ public partial class MainWindow : Window
             {
                 SigningIdentityCombo.SelectedIndex = 0;
             }
+
+            ArchiveSigningIdentityCombo.ItemsSource = identities;
+            ArchiveSigningIdentityCombo.SelectedItem = identities.FirstOrDefault(identity =>
+                string.Equals(identity.Id, archiveSelectedId, StringComparison.OrdinalIgnoreCase));
+            if (ArchiveSigningIdentityCombo.SelectedItem is null && identities.Count > 0)
+            {
+                ArchiveSigningIdentityCombo.SelectedIndex = 0;
+            }
         }
         catch (Exception exception)
         {
             SigningIdentityCombo.ItemsSource = Array.Empty<IdentitySummary>();
+            ArchiveSigningIdentityCombo.ItemsSource = Array.Empty<IdentitySummary>();
             MessageBox.Show(this, $"无法读取本机发送者身份：\n\n{exception.Message}", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -1600,6 +1986,8 @@ public partial class MainWindow : Window
         ConfirmPasswordInput.Clear();
         DecryptPasswordInput.Clear();
         SigningIdentityPasswordInput.Clear();
+        ArchiveSigningIdentityPasswordInput.Clear();
+        ArchivePasswordInput.Clear();
     }
 
     private static SensitivePassword ReadPassword(PasswordBox input)
@@ -1763,6 +2151,10 @@ public partial class MainWindow : Window
     {
         await AnimateWindowFrameAsync(0.985, 0.35, 130);
         WindowState = WindowState.Minimized;
+        // 动画的最终值优先级高于直接赋值；不清除它，窗口恢复时会偶尔一直保持半透明。
+        WindowFrame.BeginAnimation(OpacityProperty, null);
+        WindowScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+        WindowScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
         WindowScale.ScaleX = WindowScale.ScaleY = 1;
         WindowFrame.Opacity = 1;
     }
@@ -1780,6 +2172,15 @@ public partial class MainWindow : Window
 
     private void Window_StateChanged(object sender, EventArgs e)
     {
+        if (WindowState != WindowState.Minimized)
+        {
+            // 任务栏恢复窗口时也保证不会继承最小化动画留下的透明状态。
+            WindowFrame.BeginAnimation(OpacityProperty, null);
+            WindowScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            WindowScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            WindowFrame.Opacity = 1;
+            WindowScale.ScaleX = WindowScale.ScaleY = 1;
+        }
         var maximized = WindowState == WindowState.Maximized;
         WindowFrame.Margin = maximized ? new Thickness(0) : new Thickness(10);
         WindowFrame.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(20);

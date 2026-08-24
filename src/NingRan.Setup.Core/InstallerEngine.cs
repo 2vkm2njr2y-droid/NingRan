@@ -15,17 +15,22 @@ public sealed class InstallerEngine
         ArgumentNullException.ThrowIfNull(payload);
         var existingPath = ShellIntegration.FindInstalledPath();
         if (existingPath is not null &&
-            !string.Equals(
-                Path.GetFullPath(existingPath),
-                Path.GetFullPath(SetupProduct.DefaultInstallPath),
-                StringComparison.OrdinalIgnoreCase))
+            !SetupPathSafety.IsSupportedInstallPath(existingPath))
         {
             existingPath = null;
         }
 
         if (existingPath is not null && Directory.Exists(existingPath))
         {
-            SetupPathSafety.VerifyInstallDirectoryPermissions(existingPath);
+            if (SetupPathSafety.IsLegacyInstallPath(existingPath))
+            {
+                SetupPathSafety.HardenLegacyInstallDirectory(existingPath);
+                SetupPathSafety.ValidateUninstallPath(existingPath);
+            }
+            else
+            {
+                SetupPathSafety.VerifyInstallDirectoryPermissions(existingPath);
+            }
         }
         var existingState = existingPath is null ? null : InstallState.TryLoad(existingPath);
         var target = SetupPathSafety.ValidateInstallPath(
@@ -65,6 +70,10 @@ public sealed class InstallerEngine
             newState = new InstallState
             {
                 InstallPath = target,
+                MigratedFromPath = existingState is not null &&
+                                   !string.Equals(existingState.InstallPath, target, StringComparison.OrdinalIgnoreCase)
+                    ? existingState.InstallPath
+                    : null,
                 DesktopShortcut = options.CreateDesktopShortcut,
                 StartMenuShortcut = options.CreateStartMenuShortcut,
                 FileAssociations = options.AssociateSupportedFiles,
@@ -119,7 +128,7 @@ public sealed class InstallerEngine
             {
                 try
                 {
-                    var oldPath = SetupPathSafety.ValidateInstalledProductPath(existingState.InstallPath);
+                    var oldPath = SetupPathSafety.ValidateUninstallPath(existingState.InstallPath);
                     SafeDirectoryTree.Delete(oldPath);
                 }
                 catch
@@ -183,31 +192,77 @@ public sealed class InstallerEngine
         }
     }
 
-    public void PrepareUninstall(string installPath, bool deleteUserData)
+    public InstallState PrepareUninstall(string installPath, bool deleteUserData)
     {
-        var validatedPath = SetupPathSafety.ValidateInstalledProductPath(installPath);
+        var validatedPath = SetupPathSafety.ValidateUninstallPath(installPath);
         EnsureMainProgramIsClosed();
         var state = InstallState.TryLoad(validatedPath)
             ?? throw new InvalidOperationException("安装记录无法读取，已停止卸载。");
-        ShellIntegration.Remove(state);
+        ShellIntegration.Remove(state, removeUninstallEntry: false);
         if (deleteUserData)
         {
             SafeDirectoryTree.DeleteUserData(SetupProduct.UserDataPath);
         }
 
+        DeleteMigratedInstall(state);
         RemoveInstalledPayloadFiles(validatedPath);
+        RemoveInstallArtifacts(validatedPath);
+        return state;
+    }
+
+    private static void DeleteMigratedInstall(InstallState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.MigratedFromPath) ||
+            !SetupPathSafety.IsLegacyInstallPath(state.MigratedFromPath))
+        {
+            return;
+        }
+
+        var oldPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(state.MigratedFromPath));
+        if (Directory.Exists(oldPath))
+        {
+            SafeDirectoryTree.Delete(oldPath);
+        }
+    }
+
+    private static void RemoveInstallArtifacts(string installPath)
+    {
+        var root = SetupPathSafety.ValidateUninstallPath(installPath);
+        var parent = Path.GetDirectoryName(root)
+            ?? throw new InvalidOperationException("无法确定安装目录的上级位置。");
+        var leaf = Path.GetFileName(root);
+        foreach (var entry in new DirectoryInfo(parent).EnumerateDirectories())
+        {
+            if (!entry.Name.StartsWith(leaf + ".install-", StringComparison.OrdinalIgnoreCase) &&
+                !entry.Name.StartsWith(leaf + ".backup-", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                entry.Delete(recursive: false);
+            }
+            else
+            {
+                SafeDirectoryTree.Delete(entry.FullName);
+            }
+        }
     }
 
     public static void EnsureMainProgramIsClosed()
     {
         using var current = Process.GetCurrentProcess();
-        foreach (var process in Process.GetProcessesByName("NingRan"))
+        foreach (var processName in new[] { "NingRan", "NingRan.StrictMonitor", "NingRan.MediaPlayer" })
         {
-            using (process)
+            foreach (var process in Process.GetProcessesByName(processName))
             {
-                if (process.Id != current.Id && !process.HasExited)
+                using (process)
                 {
-                    throw new InvalidOperationException("凝然加密仍在运行。请先关闭主程序，再继续安装或卸载。");
+                    if (process.Id != current.Id && !process.HasExited)
+                    {
+                        throw new InvalidOperationException("凝然加密的程序或安全组件仍在运行。请先关闭相关窗口，再继续安装或卸载。");
+                    }
                 }
             }
         }
@@ -215,12 +270,13 @@ public sealed class InstallerEngine
 
     private static void RemoveInstalledPayloadFiles(string installPath)
     {
-        var root = SetupPathSafety.ValidateFixedInstallPath(installPath);
+        var root = SetupPathSafety.ValidateUninstallPath(installPath);
         var uninstaller = Path.Combine(root, SetupProduct.UninstallerName);
         foreach (var entry in new DirectoryInfo(root).EnumerateFileSystemInfos())
         {
             if (entry is FileInfo file &&
-                string.Equals(file.FullName, uninstaller, StringComparison.OrdinalIgnoreCase))
+                (string.Equals(file.FullName, uninstaller, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(file.FullName, Path.Combine(root, SetupProduct.StateFileName), StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }

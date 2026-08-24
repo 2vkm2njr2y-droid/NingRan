@@ -15,31 +15,57 @@ public partial class App : Application
         CrashReportService.CleanupPreviousReports();
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         TaskScheduler.UnobservedTaskException += App_UnobservedTaskException;
-        var associatedFile = e.Args.FirstOrDefault(File.Exists);
-        _singleInstance = new SingleInstanceCoordinator(Dispatcher);
-        if (!_singleInstance.IsPrimaryInstance)
+        var highSecurityOpen = HighSecurityLaunch.TryReadPath(e.Args, out var highSecurityArchivePath);
+        var associatedFile = highSecurityArchivePath ?? e.Args.FirstOrDefault(File.Exists);
+        if (highSecurityOpen && !HighSecurityLaunch.IsTrustedInstalledComponent(
+                Environment.ProcessPath ?? string.Empty,
+                "NingRan.exe"))
         {
-            var delivered = await _singleInstance.NotifyPrimaryAsync(associatedFile);
-            if (!delivered)
-            {
-                MessageBox.Show(
-                    "凝然加密已经在运行，但暂时无法联系现有窗口。请切换到已打开的窗口后重试。",
-                    "凝然加密",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-
-            Shutdown(delivered ? 0 : 2);
+            MessageBox.Show(
+                "高安全查看只能从受保护的正式安装位置启动，已拒绝当前请求。",
+                "凝然加密",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            Shutdown(-1);
             return;
         }
 
-        _singleInstance.StartListening();
-        if (NingRanRuntime.IsProcessElevated())
+        if (NingRanRuntime.IsProcessElevated() && !highSecurityOpen)
         {
             var notice = new SecurityNoticeWindow();
             notice.ShowDialog();
             Shutdown(-1);
             return;
+        }
+
+        if (highSecurityOpen && !NingRanRuntime.IsProcessElevated())
+        {
+            MessageBox.Show("高安全查看必须经 Windows 管理员确认启动。请从普通窗口的“高安全打开”按钮重新开始。",
+                "凝然加密", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Shutdown(-1);
+            return;
+        }
+
+        if (!highSecurityOpen)
+        {
+            _singleInstance = new SingleInstanceCoordinator(Dispatcher);
+            if (!_singleInstance.IsPrimaryInstance)
+            {
+                var delivered = await _singleInstance.NotifyPrimaryAsync(associatedFile);
+                if (!delivered)
+                {
+                    MessageBox.Show(
+                        "凝然加密已经在运行，但暂时无法联系现有窗口。请切换到已打开的窗口后重试。",
+                        "凝然加密",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+
+                Shutdown(delivered ? 0 : 2);
+                return;
+            }
+
+            _singleInstance.StartListening();
         }
 
         TemporaryContentCleanupResult cleanupResult;
@@ -63,7 +89,7 @@ public partial class App : Application
         splash.Show();
 
         var minimumDisplay = Task.Delay(TimeSpan.FromSeconds(2));
-        var mainWindow = new MainWindow();
+        var mainWindow = new MainWindow(allowElevatedMediaBrowsing: highSecurityOpen);
         await minimumDisplay;
 
         MainWindow = mainWindow;
@@ -76,7 +102,7 @@ public partial class App : Application
             await mainWindow.OpenAssociatedFileAsync(associatedFile);
         }
 
-        _singleInstance.SetRequestHandler(mainWindow.HandleExternalLaunch);
+        _singleInstance?.SetRequestHandler(mainWindow.HandleExternalLaunch);
 
         if (cleanupResult.Failures.Count > 0)
         {

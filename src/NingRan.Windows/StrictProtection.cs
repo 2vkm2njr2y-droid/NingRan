@@ -49,7 +49,7 @@ internal sealed class SecurityEventLog
     {
         var directory = DirectoryPath;
         Directory.CreateDirectory(directory);
-        var entry = new SecurityLogEntry(alert.OccurredAtUtc, "检测到其他程序尝试读取受保护内存",
+        var entry = new SecurityLogEntry(alert.OccurredAtUtc, "检测到其他程序仍持有受保护内存读取权限",
             alert.ProcessId, alert.ProcessPath, alert.TargetComponent, $"0x{alert.AccessMask:X8}", "已停止操作并请求清理临时明文");
         File.AppendAllText(LogPath, JsonSerializer.Serialize(entry, SettingsJsonContext.Default.SecurityLogEntry) + Environment.NewLine);
     }
@@ -98,9 +98,9 @@ internal sealed class StrictProtectionCoordinator : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
         LastFailureReason = null;
         var helperPath = Path.Combine(AppContext.BaseDirectory, "NingRan.StrictMonitor.exe");
-        if (!File.Exists(helperPath))
+        if (!HighSecurityLaunch.IsTrustedInstalledComponent(helperPath, "NingRan.StrictMonitor.exe"))
         {
-            return Fail($"没有找到监控程序：{helperPath}");
+            return Fail($"监控程序不在受保护的正式安装位置：{helperPath}");
         }
 
         var pipeName = $"NingRan.StrictMonitor.{Environment.ProcessId}.{Guid.NewGuid():N}";
@@ -286,7 +286,7 @@ internal sealed record StrictMonitorMessage(string Kind, int ProcessId = 0, stri
 
 internal sealed class StrictProtectionDialog : Window
 {
-    private readonly CheckBox _enabled = new() { Content = "开启严格防护（下次启动会自动请求管理员确认）", Margin = new Thickness(0, 0, 0, 10) };
+    private readonly CheckBox _enabled = new() { Content = "开启严格防护监控（下次启动会自动请求管理员确认）", Margin = new Thickness(0, 0, 0, 10) };
     private readonly ListBox _allowed = new() { MinHeight = 135 };
     private readonly StrictProtectionSettings _original;
 
@@ -322,7 +322,7 @@ internal sealed class StrictProtectionDialog : Window
                     new TextBlock { Text = "严格防护", FontSize = 19, FontWeight = FontWeights.SemiBold },
                     new TextBlock
                     {
-                        Text = "监控程序单独申请管理员权限。它会保护主窗口、内嵌播放器、预览画面和自身；发现不在允许名单内的软件读取内存时，会记录事件、停止当前操作并清理临时明文。",
+                        Text = "监控程序单独申请管理员权限，并定期检查主窗口、内嵌播放器、预览画面和自身。发现不在允许名单内的软件仍持有读取权限时，会记录事件、停止当前操作并清理临时明文。它用于发现和缩短风险，不能保证拦截一次极短的读取。",
                         TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 14)
                     },
                     _enabled,

@@ -50,7 +50,7 @@ internal static class PayloadContainer
                     .ConfigureAwait(false);
 
                 await using var input = new FileStream(
-                    entry.SourceHandle,
+                    entry.SourceHandle ?? throw new NingRanException("缺少原始文件读取句柄。"),
                     FileAccess.Read,
                     BufferSize,
                     isAsync: true);
@@ -256,6 +256,7 @@ internal static class PayloadContainer
                     if (destination is not null)
                     {
                         Directory.CreateDirectory(destination);
+                        WindowsFileSystemSafety.VerifyDirectoryChain(stagingDirectory!, destination);
                         directoryTimes.Add((destination, ticks));
                     }
 
@@ -275,6 +276,7 @@ internal static class PayloadContainer
                     if (destination is not null)
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                        WindowsFileSystemSafety.VerifyDirectoryChain(stagingDirectory!, Path.GetDirectoryName(destination)!);
                         output = new FileStream(
                             destination,
                             FileMode.CreateNew,

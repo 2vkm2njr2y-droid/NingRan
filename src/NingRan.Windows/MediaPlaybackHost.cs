@@ -51,11 +51,10 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
                 FileName = playerPath,
                 WorkingDirectory = AppContext.BaseDirectory,
                 UseShellExecute = false,
+                RedirectStandardInput = true,
             };
             info.ArgumentList.Add("--pipe");
             info.ArgumentList.Add(_pipeName);
-            info.ArgumentList.Add("--token");
-            info.ArgumentList.Add(_token);
             info.ArgumentList.Add("--name");
             info.ArgumentList.Add(_entry.Name);
             info.ArgumentList.Add("--length");
@@ -66,6 +65,9 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
             info.ArgumentList.Add(_entry.MediaKind == SecureMediaKind.Audio ? "audio" : "video");
 
             var player = Process.Start(info) ?? throw new InvalidOperationException("Windows 没有启动独立播放器。");
+            await player.StandardInput.WriteLineAsync(_token).ConfigureAwait(false);
+            await player.StandardInput.FlushAsync().ConfigureAwait(false);
+            player.StandardInput.Close();
             player.EnableRaisingEvents = true;
             player.Exited += Player_Exited;
             lock (_sync) _player = player;

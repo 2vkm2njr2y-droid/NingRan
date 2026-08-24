@@ -168,6 +168,30 @@ internal static class WindowsFileSystemSafety
 
     public static StableDirectoryPath LockDirectoryPath(string path) => new(path);
 
+    public static void VerifyDirectoryChain(string rootPath, string directoryPath)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
+        var directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directoryPath));
+        if (!string.Equals(directory, root, StringComparison.OrdinalIgnoreCase) &&
+            !directory.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new NingRanException("处理路径超出了安全目录范围。");
+        }
+
+        var current = root;
+        var relative = Path.GetRelativePath(root, directory);
+        if (relative != ".")
+        {
+            foreach (var part in relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = Path.Combine(current, part);
+                if (!Directory.Exists(current)) continue;
+                using var handle = OpenStableDirectory(current);
+                VerifyHandlePath(handle, current);
+            }
+        }
+    }
+
     public static void VerifyHandlePath(SafeFileHandle handle, string expectedPath)
     {
         var actualPath = GetFinalPath(handle);
