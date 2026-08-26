@@ -11,6 +11,14 @@ public enum SizePaddingMode
     Fixed10GiB,
 }
 
+public enum ArchiveCompressionLevel
+{
+    Store,
+    Fastest,
+    Standard,
+    Maximum,
+}
+
 public sealed record SizePaddingEstimate(long ContentBytes, long AdditionalPaddingBytes);
 
 public sealed class EncryptRequest : IDisposable
@@ -22,6 +30,7 @@ public sealed class EncryptRequest : IDisposable
         EncryptionMode Mode = EncryptionMode.Standard,
         string? KeyFilePath = null,
         bool HideExactSize = false,
+        ArchiveCompressionLevel Compression = ArchiveCompressionLevel.Standard,
         string? SigningIdentityId = null,
         string? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
@@ -33,6 +42,7 @@ public sealed class EncryptRequest : IDisposable
             Mode,
             KeyFilePath,
             HideExactSize ? SizePaddingMode.Rounded : SizePaddingMode.None,
+            Compression,
             SigningIdentityId,
             SigningIdentityPassword is null ? null : SensitivePassword.FromString(SigningIdentityPassword),
             PhysicalDevices,
@@ -47,6 +57,7 @@ public sealed class EncryptRequest : IDisposable
         EncryptionMode Mode = EncryptionMode.Standard,
         string? KeyFilePath = null,
         SizePaddingMode SizePadding = SizePaddingMode.None,
+        ArchiveCompressionLevel Compression = ArchiveCompressionLevel.Standard,
         string? SigningIdentityId = null,
         SensitivePassword? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
@@ -58,6 +69,7 @@ public sealed class EncryptRequest : IDisposable
         this.Mode = Mode;
         this.KeyFilePath = KeyFilePath;
         this.SizePadding = SizePadding;
+        this.Compression = Compression;
         this.SigningIdentityId = SigningIdentityId;
         this.SigningIdentityPassword = SigningIdentityPassword;
         this.PhysicalDevices = PhysicalDevices?.ToArray() ?? [];
@@ -77,6 +89,8 @@ public sealed class EncryptRequest : IDisposable
     public SizePaddingMode SizePadding { get; }
 
     public bool HideExactSize => SizePadding != SizePaddingMode.None;
+
+    public ArchiveCompressionLevel Compression { get; }
 
     public string? SigningIdentityId { get; }
 
@@ -206,6 +220,7 @@ public sealed class ArchiveUpdateRequest : IDisposable
         string signingIdentityId,
         SensitivePassword signingIdentityPassword,
         string? keyFilePath = null,
+        ArchiveCompressionLevel compression = ArchiveCompressionLevel.Standard,
         IReadOnlyList<string>? pathsToRemove = null,
         IReadOnlyList<ArchiveAppendSource>? additions = null,
         nint ownerWindowHandle = 0)
@@ -215,6 +230,7 @@ public sealed class ArchiveUpdateRequest : IDisposable
         SigningIdentityId = signingIdentityId;
         SigningIdentityPassword = signingIdentityPassword;
         KeyFilePath = keyFilePath;
+        Compression = compression;
         PathsToRemove = pathsToRemove?.ToArray() ?? [];
         Additions = additions?.ToArray() ?? [];
         OwnerWindowHandle = ownerWindowHandle;
@@ -225,6 +241,7 @@ public sealed class ArchiveUpdateRequest : IDisposable
     public string SigningIdentityId { get; }
     public SensitivePassword SigningIdentityPassword { get; }
     public string? KeyFilePath { get; }
+    public ArchiveCompressionLevel Compression { get; }
     public IReadOnlyList<string> PathsToRemove { get; }
     public IReadOnlyList<ArchiveAppendSource> Additions { get; }
     public nint OwnerWindowHandle { get; }

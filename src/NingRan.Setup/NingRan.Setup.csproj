@@ -14,11 +14,21 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>NingRanSetup</AssemblyName>
     <RootNamespace>NingRan.Setup.Windows</RootNamespace>
-    <Version>6.1.11</Version>
-    <AssemblyVersion>6.1.11.0</AssemblyVersion>
-    <FileVersion>6.1.11.0</FileVersion>
-    <InformationalVersion>6.1.11</InformationalVersion>
+    <Version>6.1.16</Version>
+    <AssemblyVersion>6.1.16.0</AssemblyVersion>
+    <FileVersion>6.1.16.0</FileVersion>
+    <InformationalVersion>6.1.16</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- Keep single-file as a project property so NuGet's locked restore sees
+         the ILLink tool dependency consistently instead of receiving it only
+         as a one-off global property during the final publish. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(SetupFlavor)' == 'MediaPlayer'">
+    <DefineConstants>$(DefineConstants);NINGRAN_MEDIA_PLAYER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

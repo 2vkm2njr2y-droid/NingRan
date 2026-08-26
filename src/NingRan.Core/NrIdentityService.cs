@@ -814,6 +814,8 @@ public sealed class NrIdentityService
 
     private static string EnsureIdentityDirectory()
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
+
         var parent = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "NingRan");

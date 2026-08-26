@@ -2,15 +2,19 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:System.Windows.Automation;assembly=PresentationCore"
-        Title="核对公开身份" Width="500" SizeToContent="Height"
+        Title="管理员核对公开身份" Width="540" SizeToContent="Height"
         ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False">
     <Border Padding="26">
         <StackPanel>
-            <TextBlock Text="输入发送者安全码" FontSize="19" FontWeight="Bold" />
+            <TextBlock Text="管理员确认：核对发送者安全码" FontSize="19" FontWeight="Bold" />
             <TextBlock Margin="0,7,0,18" TextWrapping="Wrap"
                        Foreground="{StaticResource MutedBrush}"
                        Text="程序不会显示正确答案。请通过电话、当面或其他独立可信方式，向发送者取得安全码。" />
+
+            <Border Background="#FFF7E8" CornerRadius="9" Padding="12,10" Margin="0,0,0,14">
+                <TextBlock x:Name="TargetAccountText" TextWrapping="Wrap" />
+            </Border>
 
             <Border Background="#EDF7F3" CornerRadius="9" Padding="12,10" Margin="0,0,0,16">
                 <StackPanel>

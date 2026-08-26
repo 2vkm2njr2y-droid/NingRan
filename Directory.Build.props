@@ -4,5 +4,7 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
+    <StartupHookSupport>false</StartupHookSupport>
+    <EnableDiagnostics>false</EnableDiagnostics>
   </PropertyGroup>
 </Project>

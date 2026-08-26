@@ -68,6 +68,7 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
 
     public PhysicalDeviceDescriptor RegisterStorageDevice(string path, string userName)
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
         ValidateName(userName);
         var connected = RemovableStoragePhysicalDevice.GetRequired(path);
         var tokenDirectory = Path.Combine(connected.RootPath, TokenDirectoryName);
@@ -145,6 +146,7 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
         nint ownerWindowHandle,
         CancellationToken cancellationToken = default)
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
         ValidateName(userName);
         var descriptor = await _fido2.RegisterAsync(
             userName.Trim(),
@@ -156,6 +158,7 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
 
     public void RenameDevice(string id, string newName)
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ValidateName(newName);
         var devices = ReadRegistry();
@@ -171,6 +174,7 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
 
     public void ForgetDevice(string id)
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         var devices = ReadRegistry();
         if (devices.RemoveAll(device => string.Equals(device.Id, id, StringComparison.Ordinal)) == 0)
@@ -471,6 +475,8 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
 
     private void WriteRegistry(List<PhysicalDeviceDescriptor> devices)
     {
+        WindowsFileSystemSafety.ThrowIfProcessIsElevated();
+
         var directory = Path.GetDirectoryName(_registryPath)!;
         Directory.CreateDirectory(directory);
         var plain = JsonSerializer.SerializeToUtf8Bytes(new DeviceRegistry(1, devices));

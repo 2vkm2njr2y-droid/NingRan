@@ -8,16 +8,24 @@ public partial class PublicIdentityVerificationDialog : Window
     private const int VerificationCodeLength = 7;
     private readonly string _expectedCode;
 
-    public PublicIdentityVerificationDialog(string identityName, string expectedCode)
+    public PublicIdentityVerificationDialog(
+        string identityName,
+        string expectedCode,
+        string targetAccount,
+        string targetUserSid)
     {
         InitializeComponent();
         ArgumentException.ThrowIfNullOrWhiteSpace(identityName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetAccount);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetUserSid);
         if (!IsLetterCode(expectedCode))
         {
             throw new ArgumentException("公开身份安全码格式不正确。", nameof(expectedCode));
         }
 
         IdentityNameText.Text = identityName;
+        TargetAccountText.Text =
+            $"这次确认将修改以下 Windows 账户的受保护联系人：\n{targetAccount}\nSID：{targetUserSid}";
         _expectedCode = expectedCode;
     }
 

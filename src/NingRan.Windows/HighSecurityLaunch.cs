@@ -46,14 +46,9 @@ internal static class HighSecurityLaunch
             throw new InvalidOperationException("当前程序不是从受保护的正式安装位置启动，已拒绝管理员启动。");
         }
 
-        var startInfo = new ProcessStartInfo(executablePath)
-        {
-            UseShellExecute = true,
-            Verb = "runas",
-        };
-        startInfo.ArgumentList.Add(ArgumentName);
-        startInfo.ArgumentList.Add(Path.GetFullPath(archivePath));
-        Process.Start(startInfo)?.Dispose();
+        using var launched = NativeElevationLauncher.Start(
+            NingRan.Security.NativeElevationBinding.Modes.HighSecurity,
+            [ArgumentName, Path.GetFullPath(archivePath)]);
     }
 
     internal static bool IsTrustedInstalledComponent(string path, string fileName)

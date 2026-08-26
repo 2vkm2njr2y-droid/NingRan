@@ -8,9 +8,13 @@ public sealed record KdfParameters(int MemoryKib, int Iterations, int Parallelis
     private const int MaximumCompatibleParallelism = 4;
 
     public static KdfParameters Production { get; } = new(
-        MemoryKib: 256 * 1024,
+        // Keep the default within a practical desktop memory budget. Existing
+        // archives keep and validate the parameters stored in their header.
+        MemoryKib: 64 * 1024,
         Iterations: 3,
-        Parallelism: Math.Clamp(Environment.ProcessorCount / 2, 1, 4));
+        // The bundled Argon2 implementation is most reliable with one lane
+        // across the supported Windows desktop environments.
+        Parallelism: 1);
 
     public static KdfParameters Testing { get; } = new(
         MemoryKib: 8 * 1024,

@@ -18,25 +18,54 @@ public partial class App : Application
             return;
         }
 
+        IReadOnlyList<string> applicationArguments;
+        try
+        {
+            applicationArguments = SetupBootstrap.InitializeAndGetApplicationArguments(e.Args);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(
+                $"安装程序未通过原生安全引导验证，已停止运行。\n\n{exception.Message}",
+                $"{SetupProduct.Name}安装程序",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(2);
+            return;
+        }
+
         if (!IsProcessElevated())
         {
             MessageBox.Show(
-                "凝然加密安装和卸载需要管理员权限。\n\n请在 Windows 的管理员确认窗口中选择“是”。",
-                "凝然加密安装程序",
+                $"{SetupProduct.Name}安装和卸载需要管理员权限。\n\n请在 Windows 的管理员确认窗口中选择“是”。",
+                $"{SetupProduct.Name}安装程序",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             Shutdown(-1);
             return;
         }
 
-        var executableDirectory = Path.GetDirectoryName(Environment.ProcessPath)
-            ?? AppContext.BaseDirectory;
-        var uninstall = SetupModeDetector.ShouldUninstall(e.Args, executableDirectory);
+        if (CleanupScheduler.IsCleanupInvocation(applicationArguments))
+        {
+            if (!CleanupScheduler.TryParseCleanupRequest(applicationArguments, out var cleanupRequest) ||
+                cleanupRequest is null)
+            {
+                Shutdown(2);
+                return;
+            }
+
+            Shutdown(CleanupScheduler.RunCleanup(cleanupRequest));
+            return;
+        }
+
+        var executableDirectory = Path.GetDirectoryName(SetupBootstrap.OriginExecutablePath)
+            ?? throw new InvalidOperationException("无法确认原生安装或卸载程序所在位置。");
+        var uninstall = SetupModeDetector.ShouldUninstall(applicationArguments, executableDirectory);
         var installPath = uninstall ? executableDirectory : null;
         if (uninstall && SetupPathSafety.IsLegacyInstallPath(installPath!))
         {
             MessageBox.Show(
-                "检测到旧版用户目录安装。为避免从可被普通程序修改的位置请求管理员权限，请先运行最新安装包完成升级迁移，再从 Windows 的“已安装的应用”中卸载。",
+                $"检测到旧版用户目录安装。为避免从可被普通程序修改的位置请求管理员权限，请先运行最新安装包完成升级迁移，再从 Windows 的“已安装的应用”中卸载。",
                 "需要先升级安装",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -47,7 +76,7 @@ public partial class App : Application
         if (uninstall && !SetupPathSafety.IsSupportedInstallPath(installPath!))
         {
             MessageBox.Show(
-                "卸载位置不是凝然加密的受支持安装目录，已停止操作。请从 Windows 的“已安装的应用”中重新启动卸载。",
+                $"卸载位置不是{SetupProduct.Name}的受支持安装目录，已停止操作。请从 Windows 的“已安装的应用”中重新启动卸载。",
                 "无法开始卸载",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishAot>true</PublishAot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>NingRan.NativeBootstrap</AssemblyName>
+    <Version>6.1.16</Version>
+    <AssemblyVersion>6.1.16.0</AssemblyVersion>
+    <FileVersion>6.1.16.0</FileVersion>
+    <InformationalVersion>6.1.16</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <AssemblyTitle>凝然加密安装程序</AssemblyTitle>
+    <Description>凝然加密安装程序</Description>
+    <Product>凝然加密安装程序</Product>
+    <Company>凝然加密</Company>
+    <ApplicationIcon>..\NingRan.Windows\Assets\AppIcon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>None</DebugType>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(SetupFlavor)' == 'MediaPlayer'">
+    <DefineConstants>$(DefineConstants);NINGRAN_MEDIA_PLAYER</DefineConstants>
+    <AssemblyTitle>凝然媒体播放器安装程序</AssemblyTitle>
+    <Description>凝然媒体播放器安装程序</Description>
+    <Product>凝然媒体播放器安装程序</Product>
+    <Company>凝然媒体播放器</Company>
+  </PropertyGroup>
+</Project>

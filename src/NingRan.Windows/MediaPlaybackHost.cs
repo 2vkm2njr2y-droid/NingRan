@@ -2,45 +2,90 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using NingRan.Core;
 
 namespace NingRan.Windows;
 
 /// <summary>
-/// 主程序只保留解锁会话；播放器进程只能通过一次性、带随机口令的本地管道按片段读取媒体。
-/// 这样播放器故障不会带走主界面，也不会得到密码、密钥或明文文件。
+/// 主程序只保留解锁会话；外部查看器只能通过受当前 Windows 用户限制、并逐次核对
+/// 已启动播放器进程编号的本地管道按片段读取媒体。
+/// 查看器不会得到密码、密匙、数据密钥或明文文件路径，管道中也不传递密钥或会话口令。
 /// </summary>
 internal sealed class MediaPlaybackHost : IAsyncDisposable
 {
-    private const int MaximumRequestBytes = 16 * 1024;
+    private const int MaximumRequestBytes = 4 * 1024 * 1024;
+    private const int MaximumMediaChunkBytes = 1024 * 1024;
     private readonly SecureArchiveSession _session;
-    private readonly SecureArchiveEntry _entry;
+    private readonly IReadOnlyDictionary<string, SecureArchiveEntry> _entries;
+    private readonly string _initialEntryId;
     private readonly string _pipeName = $"NingRan.Media.{Environment.ProcessId}.{Guid.NewGuid():N}";
-    private readonly string _token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly TaskCompletionSource _secureSessionConfirmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _sync = new();
     private Task? _acceptLoop;
     private Process? _player;
     private bool _stopping;
+    private int _disposeStarted;
     private bool _playerClosedNormally;
     private string? _playerProblem;
 
-    public MediaPlaybackHost(SecureArchiveSession session, SecureArchiveEntry entry)
+    public MediaPlaybackHost(SecureArchiveSession session, IReadOnlyList<SecureArchiveEntry> entries, SecureArchiveEntry initialEntry)
     {
         _session = session;
-        _entry = entry;
+        // Media-Helper 自身已经支持音频、视频、图片和 PDF；这些条目都由
+        // 独立窗口安全查看。无法启动或未安装时，调用方会回退内置查看器。
+        _entries = entries.Where(CanOpenWithExternalViewer)
+            .ToDictionary(entry => entry.RelativePath, StringComparer.Ordinal);
+        if (_entries.Count == 0 || !_entries.ContainsKey(initialEntry.RelativePath))
+        {
+            throw new ArgumentException("安全查看器没有可打开的媒体文件。", nameof(entries));
+        }
+        _initialEntryId = initialEntry.RelativePath;
     }
 
     public event EventHandler<MediaPlayerStoppedEventArgs>? PlayerStoppedUnexpectedly;
 
-    public async Task StartAsync()
+    public static bool CanOpenWithExternalViewer(SecureArchiveEntry entry) =>
+        !entry.IsDirectory &&
+        entry.MediaKind is SecureMediaKind.Audio or SecureMediaKind.Video or
+            SecureMediaKind.Image or SecureMediaKind.Pdf;
+
+    public static string? FindExternalViewer()
     {
-        var playerPath = Path.Combine(AppContext.BaseDirectory, "NingRan.MediaPlayer.exe");
-        if (!File.Exists(playerPath))
+        // 播放器独立安装在受保护的 Program Files 目录。不要接受环境变量、当前
+        // 文件夹或用户目录中的同名程序，否则解锁会话可能被交给伪装的查看器。
+        var playerDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "media-helper");
+        var candidate = Path.GetFullPath(Path.Combine(playerDirectory, "凝然媒体播放器.exe"));
+        return string.Equals(
+                   Path.GetDirectoryName(candidate),
+                   Path.TrimEndingDirectorySeparator(Path.GetFullPath(playerDirectory)),
+                   StringComparison.OrdinalIgnoreCase) &&
+               File.Exists(candidate)
+            ? candidate
+            : null;
+    }
+
+    public async Task StartAsync(string playerPath)
+    {
+        if (NingRanRuntime.IsProcessElevated())
         {
-            throw new FileNotFoundException("独立播放器没有随主程序一起安装。请重新安装最新版凝然加密。", playerPath);
+            throw new InvalidOperationException("管理员高安全窗口禁止启动外部媒体查看器。");
+        }
+
+        var trustedViewerPath = FindExternalViewer();
+        if (string.IsNullOrWhiteSpace(playerPath) ||
+            trustedViewerPath is null ||
+            !string.Equals(
+                Path.GetFullPath(playerPath),
+                Path.GetFullPath(trustedViewerPath),
+                StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(playerPath))
+        {
+            throw new FileNotFoundException("没有找到已独立安装的凝然媒体查看器。", playerPath);
         }
 
         _acceptLoop = Task.Run(AcceptLoopAsync);
@@ -49,33 +94,20 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
             var info = new ProcessStartInfo
             {
                 FileName = playerPath,
-                WorkingDirectory = AppContext.BaseDirectory,
+                WorkingDirectory = Path.GetDirectoryName(playerPath) ?? AppContext.BaseDirectory,
                 UseShellExecute = false,
-                RedirectStandardInput = true,
+                RedirectStandardInput = false,
             };
-            info.ArgumentList.Add("--pipe");
+            info.ArgumentList.Add("--ningran-secure-pipe");
             info.ArgumentList.Add(_pipeName);
-            info.ArgumentList.Add("--name");
-            info.ArgumentList.Add(_entry.Name);
-            info.ArgumentList.Add("--length");
-            info.ArgumentList.Add(_entry.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            info.ArgumentList.Add("--mime");
-            info.ArgumentList.Add(NrMediaFiles.GetContentType(_entry.Name));
-            info.ArgumentList.Add("--kind");
-            info.ArgumentList.Add(_entry.MediaKind == SecureMediaKind.Audio ? "audio" : "video");
+            info.ArgumentList.Add("--ningran-selected");
+            info.ArgumentList.Add(_initialEntryId);
 
             var player = Process.Start(info) ?? throw new InvalidOperationException("Windows 没有启动独立播放器。");
-            await player.StandardInput.WriteLineAsync(_token).ConfigureAwait(false);
-            await player.StandardInput.FlushAsync().ConfigureAwait(false);
-            player.StandardInput.Close();
             player.EnableRaisingEvents = true;
             player.Exited += Player_Exited;
             lock (_sync) _player = player;
-            await Task.Delay(350, _shutdown.Token).ConfigureAwait(false);
-            if (player.HasExited)
-            {
-                throw new InvalidOperationException("独立播放器刚启动就退出了。请查看崩溃报告或重新安装最新版程序。");
-            }
+            await _secureSessionConfirmed.Task.WaitAsync(TimeSpan.FromSeconds(5), _shutdown.Token).ConfigureAwait(false);
         }
         catch
         {
@@ -118,10 +150,27 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
         await using var ownedServer = server;
         try
         {
+            if (!IsLaunchedPlayerConnection(server))
+            {
+                await WriteFrameAsync(server, new MediaPipeResponse(false, "连接来源不是本次启动的凝然媒体查看器。"), _shutdown.Token).ConfigureAwait(false);
+                return;
+            }
+
             var request = await ReadFrameAsync<MediaPipeRequest>(server, _shutdown.Token).ConfigureAwait(false);
-            if (request is null || !TokenMatches(request.Token))
+            if (request is null)
             {
                 await WriteFrameAsync(server, new MediaPipeResponse(false, "未通过播放器连接验证。"), _shutdown.Token).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.Equals(request.Kind, "hello", StringComparison.Ordinal))
+            {
+                if (!string.Equals(request.Path, _initialEntryId, StringComparison.Ordinal))
+                {
+                    await WriteFrameAsync(server, new MediaPipeResponse(false, "播放器请求的初始媒体不正确。"), _shutdown.Token).ConfigureAwait(false);
+                    return;
+                }
+                await WriteFrameAsync(server, new MediaPipeResponse(true), _shutdown.Token).ConfigureAwait(false);
                 return;
             }
 
@@ -139,23 +188,44 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
                 return;
             }
 
+            if (string.Equals(request.Kind, "catalog", StringComparison.Ordinal))
+            {
+                var files = _entries.Values.Select(entry => new MediaPipeCatalogEntry(
+                    entry.RelativePath,
+                    entry.Name,
+                    entry.Length,
+                    NrMediaFiles.GetContentType(entry.Name),
+                    entry.MediaKind switch
+                    {
+                        SecureMediaKind.Video => "video",
+                        SecureMediaKind.Audio => "audio",
+                        SecureMediaKind.Image => "image",
+                        SecureMediaKind.Pdf => "pdf",
+                        _ => "text",
+                    })).ToArray();
+                await WriteFrameAsync(server, new MediaPipeResponse(true, Entries: files), _shutdown.Token).ConfigureAwait(false);
+                _secureSessionConfirmed.TrySetResult();
+                return;
+            }
+
             if (!string.Equals(request.Kind, "read", StringComparison.Ordinal))
             {
                 await WriteFrameAsync(server, new MediaPipeResponse(false, "播放器请求类型不正确。"), _shutdown.Token).ConfigureAwait(false);
                 return;
             }
 
-            if (request.Start < 0 || request.Start >= _entry.Length || request.Length <= 0)
+            if (string.IsNullOrWhiteSpace(request.Path) || !_entries.TryGetValue(request.Path, out var entry) ||
+                request.Start < 0 || request.Start >= entry.Length || request.Length is <= 0 or > MaximumMediaChunkBytes)
             {
-                await WriteFrameAsync(server, new MediaPipeResponse(false, "读取位置超出媒体范围。"), _shutdown.Token).ConfigureAwait(false);
+                await WriteFrameAsync(server, new MediaPipeResponse(false, "读取位置或本次读取大小不符合安全查看要求。"), _shutdown.Token).ConfigureAwait(false);
                 return;
             }
 
-            var length = Math.Min(request.Length, _entry.Length - request.Start);
-            await WriteFrameAsync(server, new MediaPipeResponse(true, null, request.Start, length, _entry.Length,
-                NrMediaFiles.GetContentType(_entry.Name)), _shutdown.Token).ConfigureAwait(false);
+            var length = Math.Min(request.Length, entry.Length - request.Start);
+            await WriteFrameAsync(server, new MediaPipeResponse(true, null, request.Start, length, entry.Length,
+                NrMediaFiles.GetContentType(entry.Name)), _shutdown.Token).ConfigureAwait(false);
 
-            await using var source = _session.OpenEntryReadStream(_entry.RelativePath);
+            await using var source = _session.OpenEntryReadStream(entry.RelativePath);
             source.Position = request.Start;
             await CopyExactlyAsync(source, server, length, _shutdown.Token).ConfigureAwait(false);
         }
@@ -181,13 +251,18 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
         }
 
         PlayerStoppedUnexpectedly?.Invoke(this, new MediaPlayerStoppedEventArgs(
-            _entry.Name, _playerProblem ?? $"独立播放器意外退出（退出代码 {exitCode}）。"));
+            _entries[_initialEntryId].Name, _playerProblem ?? $"凝然媒体查看器意外退出（退出代码 {exitCode}）。"));
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+        {
+            return;
+        }
         _stopping = true;
-        _shutdown.Cancel();
+        try { _shutdown.Cancel(); }
+        catch (ObjectDisposedException) { return; }
         Process? player;
         lock (_sync)
         {
@@ -216,18 +291,26 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
         _shutdown.Dispose();
     }
 
-    private bool TokenMatches(string? supplied)
+    public async Task<int> WaitForExitAsync()
     {
-        if (string.IsNullOrWhiteSpace(supplied)) return false;
-        var expectedBytes = Encoding.UTF8.GetBytes(_token);
-        var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
-        try { return CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes); }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(expectedBytes);
-            CryptographicOperations.ZeroMemory(suppliedBytes);
-        }
+        Process? player;
+        lock (_sync) player = _player;
+        if (player is null) throw new InvalidOperationException("查看器尚未启动。");
+        await player.WaitForExitAsync().ConfigureAwait(false);
+        return player.ExitCode;
     }
+
+    private bool IsLaunchedPlayerConnection(NamedPipeServerStream server)
+    {
+        Process? player;
+        lock (_sync) player = _player;
+        if (player is null || player.HasExited || !GetNamedPipeClientProcessId(server.SafePipeHandle, out var clientProcessId)) return false;
+        return clientProcessId == player.Id;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint clientProcessId);
 
     internal static async Task<T?> ReadFrameAsync<T>(Stream stream, CancellationToken cancellationToken)
     {
@@ -278,6 +361,7 @@ internal sealed class MediaPlayerStoppedEventArgs : EventArgs
     public string FileName { get; }
     public string Reason { get; }
 }
-internal sealed record MediaPipeRequest(string Kind, string? Token, long Start = 0, long Length = 0, string? Message = null);
+internal sealed record MediaPipeRequest(string Kind, long Start = 0, long Length = 0, string? Message = null, string? Path = null);
 internal sealed record MediaPipeResponse(bool Success, string? Error = null, long Start = 0, long Length = 0,
-    long TotalLength = 0, string? ContentType = null);
+    long TotalLength = 0, string? ContentType = null, IReadOnlyList<MediaPipeCatalogEntry>? Entries = null);
+internal sealed record MediaPipeCatalogEntry(string Id, string Name, long Length, string Mime, string Kind);

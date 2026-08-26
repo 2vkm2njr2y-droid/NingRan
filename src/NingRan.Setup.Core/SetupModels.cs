@@ -5,15 +5,30 @@ namespace NingRan.Setup;
 
 public static class SetupProduct
 {
+#if NINGRAN_MEDIA_PLAYER
+    public const string Id = "NingRan.MediaPlayer";
+    public const string Name = "凝然媒体播放器";
+    public const string MainExecutableName = "NingRan.MediaPlayer.exe";
+    public const string UninstallerName = "卸载凝然媒体播放器.exe";
+    public const string UninstallRegistryPath =
+        @"Software\Microsoft\Windows\CurrentVersion\Uninstall\NingRanMediaPlayer";
+    public static bool IsMediaPlayer => true;
+    public static bool SupportsFileAssociations => true;
+    public static bool HasUserData => false;
+#else
     public const string Id = "NingRan.Encryption";
     public const string Name = "凝然加密";
-    public const string Version = "6.1.11";
     public const string MainExecutableName = "NingRan.exe";
     public const string UninstallerName = "卸载凝然加密.exe";
-    public const string StateFileName = "install-state.json";
-    public const string PayloadManifestName = "payload-manifest.json";
     public const string UninstallRegistryPath =
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\NingRan";
+    public static bool IsMediaPlayer => false;
+    public static bool SupportsFileAssociations => true;
+    public static bool HasUserData => true;
+#endif
+    public const string Version = "6.1.16";
+    public const string StateFileName = "install-state.json";
+    public const string PayloadManifestName = "payload-manifest.json";
 
     public static string DefaultInstallPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
@@ -26,14 +41,15 @@ public static class SetupProduct
 
     public static string UserDataPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "NingRan");
+        Id);
 }
 
 public sealed record SetupOptions(
     string InstallPath,
     bool CreateDesktopShortcut,
     bool CreateStartMenuShortcut,
-    bool AssociateSupportedFiles);
+    bool AssociateSupportedFiles,
+    string Language = "zh");
 
 public sealed record AssociationBackup(string Extension, string? PreviousProgramId);
 
@@ -52,6 +68,8 @@ public sealed class InstallState
     public bool StartMenuShortcut { get; init; }
 
     public bool FileAssociations { get; init; }
+
+    public string Language { get; init; } = "zh";
 
     public IReadOnlyList<AssociationBackup> AssociationBackups { get; init; } = [];
 

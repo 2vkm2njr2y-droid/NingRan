@@ -44,7 +44,7 @@ public sealed class SecureArchiveSession : IDisposable
             Path.GetFileName(entry.RelativePath),
             entry.Kind == PayloadEntryKind.Directory,
             entry.Length,
-            entry.MediaKind)).ToArray();
+            entry.MediaKind ?? NrMediaFiles.TryGetKind(entry.RelativePath))).ToArray();
     }
 
     public string RootName => _payload.RootName;
@@ -315,7 +315,7 @@ public sealed class SecureArchiveSession : IDisposable
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        if (blockOffset < 0 || blockOffset >= entry.DataBlockCount)
+        if (blockOffset < 0 || blockOffset >= entry.Blocks.Count)
         {
             throw new ArgumentOutOfRangeException(nameof(blockOffset));
         }
@@ -326,7 +326,8 @@ public sealed class SecureArchiveSession : IDisposable
             _header,
             _dataKey!,
             _payload,
-            checked(entry.DataBlockStart + blockOffset),
+            entry,
+            blockOffset,
             ciphertext,
             tag,
             plaintext,

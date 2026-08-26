@@ -6,12 +6,37 @@ namespace NingRan.Setup;
 public static class ShellIntegration
 {
     private const string ClassesPath = @"Software\Classes";
+#if NINGRAN_MEDIA_PLAYER
     private static readonly AssociationDefinition[] Associations =
     [
-        new(".nrenc", "NingRan.EncryptedFile", "凝然加密文件", @"Assets\EncryptedFileIcon.ico"),
-        new(".nrid", "NingRan.IdentityBackup", "凝然身份备份", @"Assets\IdentityBackupIcon.ico"),
-        new(".nrpub", "NingRan.PublicIdentity", "凝然公开身份", @"Assets\PublicIdentityIcon.ico"),
+        new(".mp3", "NingRan.MediaPlayer.Mp3", "凝然媒体播放器 MP3 音频", @"Assets\AppIcon.ico"),
+        new(".wav", "NingRan.MediaPlayer.Wav", "凝然媒体播放器 WAV 音频", @"Assets\AppIcon.ico"),
+        new(".m4a", "NingRan.MediaPlayer.M4a", "凝然媒体播放器 M4A 音频", @"Assets\AppIcon.ico"),
+        new(".aac", "NingRan.MediaPlayer.Aac", "凝然媒体播放器 AAC 音频", @"Assets\AppIcon.ico"),
+        new(".flac", "NingRan.MediaPlayer.Flac", "凝然媒体播放器 FLAC 音频", @"Assets\AppIcon.ico"),
+        new(".ogg", "NingRan.MediaPlayer.Ogg", "凝然媒体播放器 OGG 音频", @"Assets\AppIcon.ico"),
+        new(".wma", "NingRan.MediaPlayer.Wma", "凝然媒体播放器 WMA 音频", @"Assets\AppIcon.ico"),
+        new(".mp4", "NingRan.MediaPlayer.Mp4", "凝然媒体播放器 MP4 视频", @"Assets\AppIcon.ico"),
+        new(".m4v", "NingRan.MediaPlayer.M4v", "凝然媒体播放器 M4V 视频", @"Assets\AppIcon.ico"),
+        new(".mov", "NingRan.MediaPlayer.Mov", "凝然媒体播放器 MOV 视频", @"Assets\AppIcon.ico"),
+        new(".avi", "NingRan.MediaPlayer.Avi", "凝然媒体播放器 AVI 视频", @"Assets\AppIcon.ico"),
+        new(".wmv", "NingRan.MediaPlayer.Wmv", "凝然媒体播放器 WMV 视频", @"Assets\AppIcon.ico"),
+        new(".webm", "NingRan.MediaPlayer.Webm", "凝然媒体播放器 WEBM 视频", @"Assets\AppIcon.ico"),
+        new(".mkv", "NingRan.MediaPlayer.Mkv", "凝然媒体播放器 MKV 视频", @"Assets\AppIcon.ico"),
+        new(".mpeg", "NingRan.MediaPlayer.Mpeg", "凝然媒体播放器 MPEG 视频", @"Assets\AppIcon.ico"),
+        new(".mpg", "NingRan.MediaPlayer.Mpg", "凝然媒体播放器 MPG 视频", @"Assets\AppIcon.ico"),
+        new(".3gp", "NingRan.MediaPlayer.ThreeGp", "凝然媒体播放器 3GP 视频", @"Assets\AppIcon.ico"),
+        new(".ts", "NingRan.MediaPlayer.Ts", "凝然媒体播放器 TS 视频", @"Assets\AppIcon.ico"),
+        new(".mpv", "NingRan.MediaPlayer.Mpv", "凝然媒体播放器 MPV 视频", @"Assets\AppIcon.ico"),
     ];
+#else
+    private static readonly AssociationDefinition[] Associations =
+    [
+        new(".nrenc", "NingRan.EncryptedFile", "凝然加密文件", @"Assets\EncryptedFileIcon.ico", "NingRan encrypted file"),
+        new(".nrid", "NingRan.IdentityBackup", "凝然身份备份", @"Assets\IdentityBackupIcon.ico", "NingRan identity backup"),
+        new(".nrpub", "NingRan.PublicIdentity", "凝然公开身份", @"Assets\PublicIdentityIcon.ico", "NingRan public identity"),
+    ];
+#endif
 
     public static string? FindInstalledPath()
     {
@@ -61,27 +86,29 @@ public static class ShellIntegration
     {
         var executable = Path.Combine(state.InstallPath, SetupProduct.MainExecutableName);
         var uninstaller = Path.Combine(state.InstallPath, SetupProduct.UninstallerName);
+        var displayName = GetDisplayName(state);
         RemoveShortcutsForTarget(executable);
         if (state.DesktopShortcut)
         {
-            CreateShortcut(GetDesktopShortcutPath(), executable, state.InstallPath);
+            CreateShortcut(GetDesktopShortcutPath(displayName), executable, state.InstallPath, displayName);
         }
 
         if (state.StartMenuShortcut)
         {
-            CreateShortcut(GetStartMenuShortcutPath(), executable, state.InstallPath);
+            CreateShortcut(GetStartMenuShortcutPath(displayName), executable, state.InstallPath, displayName);
         }
 
         if (state.FileAssociations)
         {
             foreach (var association in Associations)
             {
+                var description = GetAssociationDescription(association, state);
                 using (var programKey = Registry.CurrentUser.CreateSubKey(
                            $@"{ClassesPath}\{association.ProgramId}",
                            writable: true))
                 {
-                    programKey.SetValue(null, association.Description, RegistryValueKind.String);
-                    programKey.SetValue("FriendlyTypeName", association.Description, RegistryValueKind.String);
+                    programKey.SetValue(null, description, RegistryValueKind.String);
+                    programKey.SetValue("FriendlyTypeName", description, RegistryValueKind.String);
                 }
 
                 using (var iconKey = Registry.CurrentUser.CreateSubKey(
@@ -110,9 +137,9 @@ public static class ShellIntegration
                    SetupProduct.UninstallRegistryPath,
                    writable: true))
         {
-            uninstallKey.SetValue("DisplayName", SetupProduct.Name, RegistryValueKind.String);
+            uninstallKey.SetValue("DisplayName", displayName, RegistryValueKind.String);
             uninstallKey.SetValue("DisplayVersion", SetupProduct.Version, RegistryValueKind.String);
-            uninstallKey.SetValue("Publisher", "凝然", RegistryValueKind.String);
+            uninstallKey.SetValue("Publisher", SetupProduct.IsMediaPlayer || state.Language != "en" ? "凝然" : "NingRan", RegistryValueKind.String);
             uninstallKey.SetValue("InstallLocation", state.InstallPath, RegistryValueKind.String);
             uninstallKey.SetValue("DisplayIcon", $"\"{executable}\",0", RegistryValueKind.String);
             uninstallKey.SetValue("UninstallString", $"\"{uninstaller}\" --uninstall", RegistryValueKind.String);
@@ -195,7 +222,7 @@ public static class ShellIntegration
         NotifyShellChanged();
     }
 
-    private static void CreateShortcut(string shortcutPath, string targetPath, string workingDirectory)
+    private static void CreateShortcut(string shortcutPath, string targetPath, string workingDirectory, string displayName)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath)!);
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
@@ -211,7 +238,7 @@ public static class ShellIntegration
             dynamicShortcut.TargetPath = targetPath;
             dynamicShortcut.WorkingDirectory = workingDirectory;
             dynamicShortcut.IconLocation = $"{targetPath},0";
-            dynamicShortcut.Description = "凝然加密";
+            dynamicShortcut.Description = displayName;
             dynamicShortcut.Save();
         }
         finally
@@ -230,8 +257,13 @@ public static class ShellIntegration
 
     private static void RemoveShortcutsForTarget(string targetPath)
     {
-        TryDeleteShortcut(GetDesktopShortcutPath(), targetPath);
-        TryDeleteShortcut(GetStartMenuShortcutPath(), targetPath);
+        TryDeleteShortcut(GetDesktopShortcutPath(SetupProduct.Name), targetPath);
+        TryDeleteShortcut(GetStartMenuShortcutPath(SetupProduct.Name), targetPath);
+        if (!SetupProduct.IsMediaPlayer)
+        {
+            TryDeleteShortcut(GetDesktopShortcutPath("NingRan Encryption"), targetPath);
+            TryDeleteShortcut(GetStartMenuShortcutPath("NingRan Encryption"), targetPath);
+        }
     }
 
     private static void TryDeleteShortcut(string shortcutPath, string expectedTarget)
@@ -296,13 +328,23 @@ public static class ShellIntegration
         }
     }
 
-    private static string GetDesktopShortcutPath() => Path.Combine(
+    private static string GetDesktopShortcutPath(string displayName) => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-        "凝然加密.lnk");
+        $"{displayName}.lnk");
 
-    private static string GetStartMenuShortcutPath() => Path.Combine(
+    private static string GetStartMenuShortcutPath(string displayName) => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.Programs),
-        "凝然加密.lnk");
+        $"{displayName}.lnk");
+
+    private static string GetDisplayName(InstallState state) =>
+        SetupProduct.IsMediaPlayer || !string.Equals(state.Language, "en", StringComparison.OrdinalIgnoreCase)
+            ? SetupProduct.Name
+            : "NingRan Encryption";
+
+    private static string GetAssociationDescription(AssociationDefinition association, InstallState state) =>
+        SetupProduct.IsMediaPlayer || !string.Equals(state.Language, "en", StringComparison.OrdinalIgnoreCase)
+            ? association.Description
+            : association.DescriptionEnglish ?? association.Description;
 
     private static void NotifyShellChanged() => SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
 
@@ -324,5 +366,6 @@ public static class ShellIntegration
         string Extension,
         string ProgramId,
         string Description,
-        string IconRelativePath);
+        string IconRelativePath,
+        string? DescriptionEnglish = null);
 }

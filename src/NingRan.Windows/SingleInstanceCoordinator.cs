@@ -12,12 +12,12 @@ namespace NingRan.Windows;
 internal sealed class SingleInstanceCoordinator : IDisposable
 {
     private const string ProtocolActivationOnly = "-";
-    private const int MaximumMessageCharacters = 256 * 1024;
     private readonly Mutex _mutex;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly Dispatcher _dispatcher;
     private readonly Queue<string?> _pendingRequests = [];
     private readonly string _pipeName;
+    private readonly string? _trustedExecutablePath;
     private Action<string?>? _requestHandler;
     private Task? _listenerTask;
     private bool _ownsMutex;
@@ -28,6 +28,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         var identitySuffix = CreateIdentitySuffix();
         _pipeName = $"NingRan.Encryption.6.{identitySuffix}";
+        _trustedExecutablePath = SingleInstanceProcessIdentity.GetCurrentTrustedExecutablePath();
         _mutex = new Mutex(initiallyOwned: false, $"Local\\{_pipeName}.Mutex");
         try
         {
@@ -44,7 +45,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     public void StartListening()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!IsPrimaryInstance || _listenerTask is not null)
+        if (!IsPrimaryInstance || _listenerTask is not null || _trustedExecutablePath is null)
         {
             return;
         }
@@ -63,12 +64,16 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         }
     }
 
-    public async Task<bool> NotifyPrimaryAsync(
-        string? associatedFile,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> NotifyPrimaryAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (IsPrimaryInstance)
+        {
+            return false;
+        }
+
+        // 开发目录或其他可写位置无法防止同一用户替换程序文件，因此不通过管道传送文件路径。
+        if (_trustedExecutablePath is null)
         {
             return false;
         }
@@ -83,17 +88,19 @@ internal sealed class SingleInstanceCoordinator : IDisposable
                 PipeDirection.InOut,
                 PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await client.ConnectAsync(timeout.Token).ConfigureAwait(false);
-            AllowServerToTakeForeground(client.SafePipeHandle);
+            if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out var serverProcessId) ||
+                !SingleInstanceProcessIdentity.IsMatchingTrustedProcess(serverProcessId, _trustedExecutablePath))
+            {
+                return false;
+            }
 
-            var message = associatedFile is null
-                ? ProtocolActivationOnly
-                : Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetFullPath(associatedFile)));
             await using var writer = new StreamWriter(client, new UTF8Encoding(false), leaveOpen: true)
             {
                 AutoFlush = true,
             };
             using var reader = new StreamReader(client, Encoding.UTF8, leaveOpen: true);
-            await writer.WriteLineAsync(message.AsMemory(), timeout.Token).ConfigureAwait(false);
+            // 单实例通道只发送无敏感内容的“激活”通知。文件路径始终由新进程自己处理。
+            await writer.WriteLineAsync(ProtocolActivationOnly.AsMemory(), timeout.Token).ConfigureAwait(false);
             var response = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false);
             return string.Equals(response, "OK", StringComparison.Ordinal);
         }
@@ -116,32 +123,26 @@ internal sealed class SingleInstanceCoordinator : IDisposable
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                if (!GetNamedPipeClientProcessId(server.SafePipeHandle, out var clientProcessId) ||
+                    _trustedExecutablePath is null ||
+                    !SingleInstanceProcessIdentity.IsMatchingTrustedProcess(clientProcessId, _trustedExecutablePath))
+                {
+                    continue;
+                }
+
                 using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
                 await using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true)
                 {
                     AutoFlush = true,
                 };
                 var message = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                if (message is null || message.Length > MaximumMessageCharacters)
+                if (!string.Equals(message, ProtocolActivationOnly, StringComparison.Ordinal))
                 {
                     await writer.WriteLineAsync("ERROR").ConfigureAwait(false);
                     continue;
                 }
 
-                string? path;
-                try
-                {
-                    path = string.Equals(message, ProtocolActivationOnly, StringComparison.Ordinal)
-                        ? null
-                        : Encoding.UTF8.GetString(Convert.FromBase64String(message));
-                }
-                catch (FormatException)
-                {
-                    await writer.WriteLineAsync("ERROR").ConfigureAwait(false);
-                    continue;
-                }
-
-                QueueRequest(path);
+                QueueRequest(null);
                 await writer.WriteLineAsync("OK").ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -194,14 +195,6 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         }
     }
 
-    private static void AllowServerToTakeForeground(SafePipeHandle pipeHandle)
-    {
-        if (GetNamedPipeServerProcessId(pipeHandle, out var processId))
-        {
-            _ = AllowSetForegroundWindow(processId);
-        }
-    }
-
     public void Dispose()
     {
         if (_disposed)
@@ -235,7 +228,77 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         SafePipeHandle pipe,
         out uint serverProcessId);
 
-    [DllImport("user32.dll")]
+    [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AllowSetForegroundWindow(uint processId);
+    private static extern bool GetNamedPipeClientProcessId(
+        SafePipeHandle pipe,
+        out uint clientProcessId);
+
+}
+
+internal static class SingleInstanceProcessIdentity
+{
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    public static string? GetCurrentTrustedExecutablePath()
+    {
+        var path = Normalize(Environment.ProcessPath);
+        return path is not null && HighSecurityLaunch.IsTrustedInstalledComponent(path, "NingRan.exe")
+            ? path
+            : null;
+    }
+
+    public static bool IsMatchingTrustedProcess(uint processId, string expectedExecutablePath)
+    {
+        if (processId == 0 || processId > int.MaxValue || processId == (uint)Environment.ProcessId)
+        {
+            return false;
+        }
+
+        var actualPath = GetProcessImagePath(processId);
+        return actualPath is not null &&
+               string.Equals(actualPath, expectedExecutablePath, StringComparison.OrdinalIgnoreCase) &&
+               HighSecurityLaunch.IsTrustedInstalledComponent(actualPath, "NingRan.exe");
+    }
+
+    private static string? GetProcessImagePath(uint processId)
+    {
+        using var process = OpenProcess(ProcessQueryLimitedInformation, inheritHandle: false, processId);
+        if (process.IsInvalid)
+        {
+            return null;
+        }
+
+        var capacity = 32_768;
+        var path = new StringBuilder(capacity);
+        return QueryFullProcessImageName(process, flags: 0, path, ref capacity)
+            ? Normalize(path.ToString())
+            : null;
+    }
+
+    private static string? Normalize(string? path)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(
+        uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(
+        SafeProcessHandle process,
+        uint flags,
+        StringBuilder executableName,
+        ref int size);
 }

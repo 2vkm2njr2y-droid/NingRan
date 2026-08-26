@@ -7,12 +7,13 @@ public sealed class InstallerEngine
     public async Task<InstallState> InstallAsync(
         SetupOptions options,
         Stream payload,
-        string setupExecutablePath,
+        Action<string> copySetupExecutable,
         IProgress<SetupProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(copySetupExecutable);
         var existingPath = ShellIntegration.FindInstalledPath();
         if (existingPath is not null &&
             !SetupPathSafety.IsSupportedInstallPath(existingPath))
@@ -60,13 +61,12 @@ public sealed class InstallerEngine
             SetupPathSafety.HardenTemporaryInstallDirectory(staging);
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Copy(
-                Path.GetFullPath(setupExecutablePath),
-                Path.Combine(staging, SetupProduct.UninstallerName),
-                overwrite: false);
-            var associationBackups = existingState?.AssociationBackups.Count > 0
-                ? existingState.AssociationBackups
-                : ShellIntegration.CaptureAssociationBackups();
+            copySetupExecutable(Path.Combine(staging, SetupProduct.UninstallerName));
+            var associationBackups = SetupProduct.SupportsFileAssociations
+                ? existingState?.AssociationBackups.Count > 0
+                    ? existingState.AssociationBackups
+                    : ShellIntegration.CaptureAssociationBackups()
+                : [];
             newState = new InstallState
             {
                 InstallPath = target,
@@ -77,6 +77,7 @@ public sealed class InstallerEngine
                 DesktopShortcut = options.CreateDesktopShortcut,
                 StartMenuShortcut = options.CreateStartMenuShortcut,
                 FileAssociations = options.AssociateSupportedFiles,
+                Language = string.Equals(options.Language, "en", StringComparison.OrdinalIgnoreCase) ? "en" : "zh",
                 AssociationBackups = associationBackups,
             };
             newState.Save(staging);
@@ -100,7 +101,9 @@ public sealed class InstallerEngine
             SetupPathSafety.HardenInstallDirectory(target);
             SetupPathSafety.VerifyInstallDirectoryPermissions(target);
 
-            progress?.Report(new SetupProgress(96, "正在创建快捷方式和文件关联…"));
+            progress?.Report(new SetupProgress(96, SetupProduct.SupportsFileAssociations
+                ? "正在创建快捷方式和文件关联…"
+                : "正在创建快捷方式…"));
             if (existingState is not null)
             {
                 ShellIntegration.Remove(existingState);
@@ -239,14 +242,7 @@ public sealed class InstallerEngine
                 continue;
             }
 
-            if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                entry.Delete(recursive: false);
-            }
-            else
-            {
-                SafeDirectoryTree.Delete(entry.FullName);
-            }
+            SafeDirectoryTree.Delete(entry.FullName);
         }
     }
 
@@ -261,7 +257,7 @@ public sealed class InstallerEngine
                 {
                     if (process.Id != current.Id && !process.HasExited)
                     {
-                        throw new InvalidOperationException("凝然加密的程序或安全组件仍在运行。请先关闭相关窗口，再继续安装或卸载。");
+                        throw new InvalidOperationException($"{SetupProduct.Name}仍在运行。请先关闭相关窗口，再继续安装或卸载。");
                     }
                 }
             }
@@ -281,15 +277,7 @@ public sealed class InstallerEngine
                 continue;
             }
 
-            if (entry is DirectoryInfo directory)
-            {
-                SafeDirectoryTree.Delete(directory.FullName);
-            }
-            else
-            {
-                entry.Attributes &= ~FileAttributes.ReadOnly;
-                entry.Delete();
-            }
+            SafeDirectoryTree.Delete(entry.FullName);
         }
     }
 }

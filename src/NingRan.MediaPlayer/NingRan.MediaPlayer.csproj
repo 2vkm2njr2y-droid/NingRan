@@ -7,8 +7,21 @@
     <Nullable>enable</Nullable>
     <AssemblyName>NingRan.MediaPlayer</AssemblyName>
     <RootNamespace>NingRan.MediaPlayer</RootNamespace>
+    <Version>6.1.16</Version>
+    <AssemblyVersion>6.1.16.0</AssemblyVersion>
+    <FileVersion>6.1.16.0</FileVersion>
+    <InformationalVersion>6.1.16</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <PublishSingleFile>false</PublishSingleFile>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+    <Compile Include="..\NingRan.Core\MediaFileTypes.cs" Link="MediaFileTypes.cs" />
+    <Resource Include="..\NingRan.Windows\Assets\AppIcon.ico" Link="Assets\AppIcon.ico" />
+    <Content Include="..\NingRan.Windows\Assets\AppIcon.ico" Link="Assets\AppIcon.ico"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

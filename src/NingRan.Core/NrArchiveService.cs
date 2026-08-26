@@ -214,6 +214,7 @@ public sealed class NrArchiveService
                 archiveHeader,
                 dataKey,
                 signingIdentity ?? throw new NingRanException("缺少发送者身份，无法创建加密文件。"),
+                request.Compression,
                 (completed, message) => reporter.Report(
                     CryptoStage.Encrypting,
                     completed,
@@ -747,6 +748,7 @@ public sealed class NrArchiveService
             await temporaryFile.WriteAsync(header.Bytes, cancellationToken).ConfigureAwait(false);
             var indexedPayload = await IndexedPayloadContainer.WriteAsync(
                 temporaryFile, manifest, header, dataKey, signingIdentity,
+                request.Compression,
                 (completed, message) => reporter.Report(CryptoStage.Encrypting, completed, totalWork, message),
                 cancellationToken).ConfigureAwait(false);
             try

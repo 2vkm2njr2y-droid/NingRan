@@ -6,3 +6,5 @@
 TestResults/
 dist/
 artifacts/
+.tmp/
+dist-final/

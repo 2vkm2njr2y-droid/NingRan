@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using NingRan.Core;
 
 namespace NingRan.Windows;
@@ -8,30 +9,45 @@ namespace NingRan.Windows;
 public partial class ProgressWindow : Window
 {
     private bool _allowClose;
+    private readonly DispatcherTimer _derivingTimer;
+    private DateTime _derivingStartedAt;
+    private bool _isDeriving;
 
     public ProgressWindow(bool isEncrypting, string? operationTitle = null)
     {
         InitializeComponent();
-        TitleText.Text = operationTitle ?? (isEncrypting ? "正在加密并验证" : "正在验证并解密");
+        TitleText.Text = UiLanguage.Translate(operationTitle ?? (isEncrypting ? "正在加密并验证" : "正在验证并解密"));
+        _derivingTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _derivingTimer.Tick += (_, _) => UpdateDerivingWaitDisplay();
     }
 
     public event EventHandler? CancelRequested;
 
     public void UpdateProgress(CryptoProgress progress)
     {
+        if (progress.Stage == CryptoStage.DerivingKey)
+        {
+            BeginDerivingWait();
+            CurrentItemText.Text = UiLanguage.Translate("正在加强密码保护") + "…";
+            UpdateDerivingWaitDisplay();
+            return;
+        }
+
+        EndDerivingWait();
         var percent = progress.TotalBytes <= 0 ? 0 : progress.Fraction * 100;
         ProgressBar.Value = percent;
         PercentText.Text = $"{percent:0.0}%";
-        CurrentItemText.Text = progress.Message;
+        CurrentItemText.Text = UiLanguage.Translate(progress.Message);
         RemainingText.Text = progress.EstimatedRemaining is { } remaining
-            ? $"预计剩余 {FormatDuration(remaining)}"
-            : StageText(progress.Stage);
+            ? UiLanguage.Translate("预计剩余") + " " + FormatDuration(remaining)
+            : UiLanguage.Translate(StageText(progress.Stage));
     }
 
     public void SetCancelling()
     {
-        CurrentItemText.Text = "正在取消并清理未完成内容…";
-        RemainingText.Text = "原文件不会被改动";
+        EndDerivingWait();
+        CurrentItemText.Text = UiLanguage.Translate("正在取消并清理未完成内容…");
+        RemainingText.Text = UiLanguage.Translate("原文件不会被改动");
         CancelButton.IsEnabled = false;
     }
 
@@ -61,6 +77,36 @@ public partial class ProgressWindow : Window
         {
             e.Cancel = true;
         }
+    }
+
+    private void BeginDerivingWait()
+    {
+        if (_isDeriving) return;
+        _isDeriving = true;
+        _derivingStartedAt = DateTime.UtcNow;
+        ProgressBar.Visibility = Visibility.Collapsed;
+        PercentText.Visibility = Visibility.Collapsed;
+        _derivingTimer.Start();
+    }
+
+    private void EndDerivingWait()
+    {
+        if (!_isDeriving) return;
+        _isDeriving = false;
+        _derivingTimer.Stop();
+        ProgressBar.Visibility = Visibility.Visible;
+        PercentText.Visibility = Visibility.Visible;
+        ProgressBar.Value = 0;
+        PercentText.Text = "0%";
+    }
+
+    private void UpdateDerivingWaitDisplay()
+    {
+        if (!_isDeriving) return;
+        var elapsed = DateTime.UtcNow - _derivingStartedAt;
+        var dots = new string('.', (int)(elapsed.TotalSeconds % 4));
+        CurrentItemText.Text = UiLanguage.Translate("正在加强密码保护") + dots;
+        RemainingText.Text = UiLanguage.Translate("已等待") + " " + FormatDuration(elapsed);
     }
 
     private static string StageText(CryptoStage stage) => stage switch

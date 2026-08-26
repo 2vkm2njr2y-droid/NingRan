@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
+using NingRan.Core;
 
 namespace NingRan.Windows;
 
@@ -19,6 +20,11 @@ internal static class CrashReportService
 
     public static void CleanupPreviousReports()
     {
+        if (NingRanRuntime.IsProcessElevated())
+        {
+            return;
+        }
+
         try
         {
             if (!Directory.Exists(DirectoryPath)) return;
@@ -29,6 +35,11 @@ internal static class CrashReportService
 
     public static string Create(string feature, string message, Exception? exception = null)
     {
+        if (NingRanRuntime.IsProcessElevated())
+        {
+            throw new InvalidOperationException("管理员模式不创建普通用户目录中的错误报告。");
+        }
+
         Directory.CreateDirectory(DirectoryPath);
         var path = Path.Combine(DirectoryPath, $"report-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.json");
         var report = new CrashReport(DateTimeOffset.UtcNow, feature, Redact(message),
@@ -40,7 +51,7 @@ internal static class CrashReportService
 
     public static void Delete(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path)) return;
+        if (NingRanRuntime.IsProcessElevated() || string.IsNullOrWhiteSpace(path)) return;
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
@@ -62,19 +73,21 @@ internal sealed class CrashReportDialog : Window
     {
         _path = path;
         Owner = owner;
-        Title = title;
+        Title = UiLanguage.Translate(title);
         Width = 620;
         Height = 380;
         MinWidth = 520;
         MinHeight = 300;
         WindowStartupLocation = owner is null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner;
         var reportText = File.ReadAllText(path);
-        var export = new Button { Content = "导出报告", Padding = new Thickness(16, 6, 16, 6), Margin = new Thickness(0, 14, 8, 0) };
+        var export = new Button { Content = UiLanguage.Translate("导出报告"), Padding = new Thickness(16, 6, 16, 6), Margin = new Thickness(0, 14, 8, 0) };
         export.Click += Export_Click;
-        var close = new Button { Content = "关闭", IsDefault = true, IsCancel = true, Padding = new Thickness(18, 6, 18, 6), Margin = new Thickness(0, 14, 0, 0) };
+        var close = new Button { Content = UiLanguage.Translate("关闭"), IsDefault = true, IsCancel = true, Padding = new Thickness(18, 6, 18, 6), Margin = new Thickness(0, 14, 0, 0) };
         var description = new TextBlock
         {
-            Text = summary + "\n\n已生成临时详细报告。报告不包含密码、密钥、文件内容或本机完整路径；您可以现在导出。关闭此窗口后报告会自动删除。",
+            Text = UiLanguage.IsEnglish
+                ? summary + "\n\nA temporary detailed report was generated. It contains no passwords, keys, file contents, or full local paths; you can export it now. The report is deleted when this window closes."
+                : summary + "\n\n已生成临时详细报告。报告不包含密码、密钥、文件内容或本机完整路径；您可以现在导出。关闭此窗口后报告会自动删除。",
             TextWrapping = TextWrapping.Wrap,
         };
         var details = new TextBox
@@ -120,7 +133,12 @@ internal sealed class CrashReportDialog : Window
 
     private void Export_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new SaveFileDialog { Title = "导出错误报告", FileName = $"凝然错误报告-{DateTime.Now:yyyyMMdd-HHmmss}.json", Filter = "报告文件|*.json" };
+        var dialog = new SaveFileDialog
+        {
+            Title = UiLanguage.Translate("导出错误报告"),
+            FileName = UiLanguage.IsEnglish ? $"NingRan-error-report-{DateTime.Now:yyyyMMdd-HHmmss}.json" : $"凝然错误报告-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+            Filter = UiLanguage.Translate("报告文件|*.json"),
+        };
         if (dialog.ShowDialog(this) != true) return;
         try
         {

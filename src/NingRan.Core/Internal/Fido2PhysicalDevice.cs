@@ -9,7 +9,11 @@ internal sealed class Fido2PhysicalDevice
 {
     private const string RelyingPartyId = "ningran.local";
     private const uint CrossPlatform = 2;
-    private const uint UserVerificationPreferred = 2;
+    private const uint UserVerificationRequired = 1;
+    private const byte AuthenticatorDataUserPresent = 0x01;
+    private const byte AuthenticatorDataUserVerified = 0x04;
+    private const int AuthenticatorDataFlagsOffset = 32;
+    private const int MinimumAuthenticatorDataLength = 37;
     private const uint AttestationNone = 1;
     private const uint TransportUsb = 0x00000001;
     private const uint TransportNfc = 0x00000002;
@@ -82,7 +86,7 @@ internal sealed class Fido2PhysicalDevice
                         Extensions = memory.Struct(extension),
                     },
                     AuthenticatorAttachment = CrossPlatform,
-                    UserVerificationRequirement = UserVerificationPreferred,
+                    UserVerificationRequirement = UserVerificationRequired,
                     AttestationConveyancePreference = AttestationNone,
                     CancellationId = cancellationId,
                     EnablePrf = 1,
@@ -107,6 +111,10 @@ internal sealed class Fido2PhysicalDevice
                     }
 
                     var attestation = Marshal.PtrToStructure<WebAuthnCredentialAttestation>(attestationPointer);
+                    EnsureUserVerified(
+                        attestation.AuthenticatorDataLength,
+                        attestation.AuthenticatorData,
+                        "登记安全密钥");
                     if (attestation.Version < 5 || attestation.PrfEnabled == 0 ||
                         attestation.CredentialIdLength is 0 or > 2048 || attestation.CredentialId == 0)
                     {
@@ -252,7 +260,7 @@ internal sealed class Fido2PhysicalDevice
                     Credentials = memory.Array(nativeCredentials),
                 },
                 AuthenticatorAttachment = CrossPlatform,
-                UserVerificationRequirement = UserVerificationPreferred,
+                UserVerificationRequirement = UserVerificationRequired,
                 CancellationId = cancellationId,
                 HmacSecretSaltValues = memory.Struct(saltValues),
             };
@@ -274,6 +282,10 @@ internal sealed class Fido2PhysicalDevice
                 }
 
                 var assertion = Marshal.PtrToStructure<WebAuthnAssertion>(assertionPointer);
+                EnsureUserVerified(
+                    assertion.AuthenticatorDataLength,
+                    assertion.AuthenticatorData,
+                    "使用安全密钥开锁");
                 EnsurePhysicalTransport(assertion.UsedTransport);
                 if (assertion.Credential.IdLength is 0 or > 2048 || assertion.Credential.Id == 0 ||
                     assertion.HmacSecret == 0)
@@ -416,7 +428,27 @@ internal sealed class Fido2PhysicalDevice
         }
 
         var detail = Marshal.GetExceptionForHR(result)?.Message;
-        throw new NingRanException($"{message}。请确认插入的是支持 HMAC-secret/PRF 的外接 FIDO2 安全密钥，并按 Windows 提示触摸或验证密钥。{(string.IsNullOrWhiteSpace(detail) ? string.Empty : $"\n\nWindows：{detail}")}");
+        throw new NingRanException($"{message}。请确认插入的是支持 HMAC-secret/PRF 且已设置 PIN 或生物识别的外接 FIDO2 安全密钥，并按 Windows 提示完成验证；程序不会退回到仅触摸确认。{(string.IsNullOrWhiteSpace(detail) ? string.Empty : $"\n\nWindows：{detail}")}");
+    }
+
+    private static void EnsureUserVerified(
+        uint authenticatorDataLength,
+        nint authenticatorData,
+        string operation)
+    {
+        if (authenticatorData == 0 || authenticatorDataLength < MinimumAuthenticatorDataLength)
+        {
+            throw new NingRanException(
+                $"{operation}时，Windows 返回的验证资料不完整，无法确认已使用 PIN 或生物识别，操作已拒绝。 ");
+        }
+
+        var flags = Marshal.ReadByte(authenticatorData, AuthenticatorDataFlagsOffset);
+        if ((flags & (AuthenticatorDataUserPresent | AuthenticatorDataUserVerified)) !=
+            (AuthenticatorDataUserPresent | AuthenticatorDataUserVerified))
+        {
+            throw new NingRanException(
+                $"{operation}时未确认 PIN 或生物识别，操作已拒绝；程序不会退回到仅触摸确认。 ");
+        }
     }
 
     private static void EnsurePhysicalTransport(uint transport)

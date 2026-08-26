@@ -15,7 +15,7 @@
             <TextBlock Text="可信发送者联系人" FontSize="19" FontWeight="Bold" />
             <TextBlock Margin="0,6,0,14" TextWrapping="Wrap"
                        Foreground="{StaticResource MutedBrush}"
-                       Text="这里只保存您已经通过另一种可信方式核对过的公开身份。删除联系人不会删除任何加密文件。" />
+                       Text="受保护联系人只能经 Windows 管理员确认后新增或删除。升级前的旧记录会保留，但重新核对前不会被信任。" />
         </StackPanel>
 
         <ListBox x:Name="ContactList" Grid.Row="1" DisplayMemberPath="DisplayText"
@@ -27,12 +27,15 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="ContactDetails" VerticalAlignment="Center" TextWrapping="Wrap"
                        Foreground="{StaticResource MutedBrush}" Text="请选择一个联系人查看确认时间。" />
-            <Button x:Name="RemoveButton" Grid.Column="1" Content="删除所选联系人"
+            <Button x:Name="ReverifyButton" Grid.Column="1" Content="重新核对"
+                    IsEnabled="False" Click="Reverify_Click" Margin="10,0,8,0" />
+            <Button x:Name="RemoveButton" Grid.Column="2" Content="删除所选联系人"
                     IsEnabled="False" Click="Remove_Click" Margin="10,0,8,0" />
-            <Button Grid.Column="2" Content="关闭" Style="{StaticResource PrimaryButton}"
+            <Button x:Name="CloseButton" Grid.Column="3" Content="关闭" Style="{StaticResource PrimaryButton}"
                     Click="Close_Click" />
         </Grid>
     </Grid>

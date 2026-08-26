@@ -68,42 +68,6 @@ public static class SafeDirectoryTree
     public static void Delete(string path)
     {
         var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        if (!Directory.Exists(fullPath))
-        {
-            return;
-        }
-
-        DeleteDirectory(fullPath);
-    }
-
-    private static void DeleteDirectory(string path)
-    {
-        var directory = new DirectoryInfo(path);
-        if (!directory.Exists)
-        {
-            return;
-        }
-
-        if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
-        {
-            directory.Delete(recursive: false);
-            return;
-        }
-
-        foreach (var entry in directory.EnumerateFileSystemInfos())
-        {
-            if (entry is DirectoryInfo childDirectory)
-            {
-                DeleteDirectory(childDirectory.FullName);
-            }
-            else
-            {
-                entry.Attributes &= ~FileAttributes.ReadOnly;
-                entry.Delete();
-            }
-        }
-
-        directory.Attributes &= ~FileAttributes.ReadOnly;
-        directory.Delete(recursive: false);
+        WindowsSafeTreeDeletion.Delete(fullPath);
     }
 }

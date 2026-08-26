@@ -68,7 +68,7 @@ public partial class PhysicalDevicesDialog : Window
 
         if (MessageBox.Show(
                 this,
-                "接下来 Windows 会要求您插入并触摸 FIDO2 安全密钥。只有支持 HMAC-secret/PRF 的外接安全密钥可以登记，不支持时不会改用较弱方式。\n\n设备丢失且没有其他已授权设备时，加密内容无法恢复。确定继续吗？",
+                "接下来 Windows 会要求您插入 FIDO2 安全密钥，并输入安全密钥 PIN 或完成生物识别。只有同时支持 HMAC-secret/PRF 和 PIN/生物验证的外接安全密钥可以登记；仅触摸确认的设备不能使用，也不会改用较弱方式。\n\n设备丢失且没有其他已授权设备时，加密内容无法恢复。确定继续吗？",
                 "确认登记 FIDO2 安全密钥",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning,

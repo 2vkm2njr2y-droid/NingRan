@@ -46,7 +46,7 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="66" />
-                <RowDefinition Height="*" />
+                        <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
@@ -70,7 +70,7 @@
                         VerticalAlignment="Center" ToolTip="打开使用说明、隐私条件和免责声明" />
                 <Border Grid.Column="4" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
                         Margin="0,0,14,0" VerticalAlignment="Center">
-                    <TextBlock Text="6.1.11" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
+                    <TextBlock Text="6.1.16" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
                 </Border>
                 <StackPanel Grid.Column="5" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
                     <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="最小化" />
@@ -101,7 +101,7 @@
                             <TextBlock Text="支持单个文件或整个文件夹，大于 10 GB 也可以正常处理。"
                                        Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0" FontSize="12" />
                         </StackPanel>
-                        <Border Grid.Row="1" Margin="0,15,0,11" CornerRadius="12" Background="#EDF7F3"
+                        <Border x:Name="SourceDropArea" Grid.Row="1" Margin="0,15,0,11" CornerRadius="12" Background="#EDF7F3"
                                 BorderBrush="#A8D1C3" BorderThickness="1">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock Text="⇩" FontSize="25" Foreground="{StaticResource PrimaryBrush}" HorizontalAlignment="Center" />
@@ -116,8 +116,8 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Button Content="选择文件" Click="PickFile_Click" Margin="0,0,8,0" />
-                            <Button Grid.Column="1" Content="选择文件夹" Click="PickFolder_Click" />
+                            <Button x:Name="PickFileButton" Content="选择文件" Click="PickFile_Click" Margin="0,0,8,0" />
+                            <Button x:Name="PickFolderButton" Grid.Column="1" Content="选择文件夹" Click="PickFolder_Click" />
                             <TextBlock x:Name="SelectedPathText" Grid.Column="2" Text="尚未选择"
                                        TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedBrush}"
                                        VerticalAlignment="Center" Margin="13,0,0,0"
@@ -158,7 +158,11 @@
                             </Grid>
                         </Border>
 
-                        <Grid x:Name="SettingsSwapHost" Grid.Row="2">
+                        <ScrollViewer x:Name="SettingsScrollViewer" Grid.Row="2" VerticalScrollBarVisibility="Hidden"
+                                      HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly"
+                                      CanContentScroll="False" Focusable="False"
+                                      PreviewMouseWheel="SettingsScrollViewer_PreviewMouseWheel">
+                            <Grid x:Name="SettingsSwapHost">
                             <StackPanel x:Name="EncryptSettingsPanel">
                                 <TextBlock Text="保护模式" FontWeight="SemiBold" Margin="0,0,0,7" />
                                 <Grid>
@@ -234,7 +238,7 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="授权物理设备（可多选）" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                        <Button Grid.Column="1" Content="管理设备" Click="ManagePhysicalDevices_Click" Padding="10,5" />
+                                        <Button x:Name="ManagePhysicalDevicesButton" Grid.Column="1" Content="管理设备" Click="ManagePhysicalDevices_Click" Padding="10,5" />
                                     </Grid>
                                     <ListBox x:Name="EncryptPhysicalDeviceList" SelectionMode="Multiple"
                                              DisplayMemberPath="DisplayText" MinHeight="44" MaxHeight="68" />
@@ -251,6 +255,17 @@
                                     <ComboBoxItem Content="固定补到约 10 GB" />
                                 </ComboBox>
                                 <TextBlock Text="开始前会显示预计额外占用空间；固定容量小于原内容时不会缩小文件。"
+                                           TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+
+                                <TextBlock Text="压缩等级" FontWeight="SemiBold" Margin="0,10,0,6" />
+                                <ComboBox x:Name="CompressionCombo" SelectedIndex="2">
+                                    <ComboBoxItem Content="存储（不压缩）" />
+                                    <ComboBoxItem Content="最快（优先速度）" />
+                                    <ComboBoxItem Content="标准（平衡速度和体积）" />
+                                    <ComboBoxItem Content="最大（优先减小体积）" />
+                                </ComboBox>
+                                <TextBlock Text="每个分段都会比较压缩结果和原始数据，自动保存较小的一份。"
                                            TextWrapping="Wrap" FontSize="11"
                                            Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
 
@@ -306,7 +321,7 @@
                                     <TextBlock Text="物理设备" FontWeight="SemiBold" Margin="0,0,0,6" />
                                     <TextBlock x:Name="DecryptPhysicalDeviceText" TextWrapping="Wrap"
                                                Foreground="{StaticResource MutedBrush}" />
-                                    <TextBlock Text="如使用了物理设备保护，请插入获授权设备。FIDO2 密钥还需按 Windows 提示触摸或验证。"
+                                    <TextBlock Text="如使用了物理设备保护，请插入获授权设备。FIDO2 密钥必须按 Windows 提示输入安全密钥 PIN 或完成生物识别。"
                                                TextWrapping="Wrap" FontSize="11" Foreground="Firebrick" Margin="0,6,0,0" />
                                 </StackPanel>
 
@@ -319,8 +334,8 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <TextBox x:Name="SenderPublicIdentityPathInput" IsReadOnly="True" />
-                                        <Button Grid.Column="1" Content="导入公开身份" Click="PickSenderPublicIdentity_Click" Margin="7,0,0,0" />
-                                        <Button Grid.Column="2" Content="管理" Click="ManageTrustedContacts_Click" Margin="7,0,0,0" />
+                                        <Button x:Name="PickSenderPublicIdentityButton" Grid.Column="1" Content="导入公开身份" Click="PickSenderPublicIdentity_Click" Margin="7,0,0,0" />
+                                        <Button x:Name="ManageTrustedContactsButton" Grid.Column="2" Content="管理" Click="ManageTrustedContacts_Click" Margin="7,0,0,0" />
                                     </Grid>
                                     <TextBlock x:Name="SenderIdentityStatusText" Text="解密时会自动核验本机可信联系人。"
                                                TextWrapping="Wrap" FontSize="11"
@@ -345,13 +360,16 @@
                                     </StackPanel>
                                 </Border>
                                 <TextBlock Grid.Row="1" Text="加密文件中的内容" FontWeight="SemiBold" Margin="0,0,0,6" />
-                                <Border Grid.Row="2" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" MinHeight="260">
-                                    <TreeView x:Name="UnlockedFileTree" BorderThickness="0" Background="Transparent" Padding="7"
+                                <Border Grid.Row="2" MinHeight="260" MaxHeight="390" VerticalAlignment="Top"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10">
+                                    <TreeView x:Name="UnlockedFileTree" BorderThickness="0" Background="Transparent" Padding="7,7,7,20"
                                               MouseDoubleClick="UnlockedFileTree_MouseDoubleClick"
                                               PreviewMouseRightButtonDown="UnlockedFileTree_PreviewMouseRightButtonDown"
                                               ContextMenuOpening="UnlockedFileTree_ContextMenuOpening"
+                                              PreviewMouseWheel="UnlockedFileTree_PreviewMouseWheel"
                                               ScrollViewer.VerticalScrollBarVisibility="Hidden"
                                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                              ScrollViewer.CanContentScroll="False"
                                               ScrollViewer.PanningMode="VerticalOnly"
                                               ItemContainerStyle="{StaticResource UnlockedFileTreeItem}">
                                         <TreeView.ContextMenu>
@@ -387,7 +405,8 @@
                                     <Button Content="关闭安全查看" Click="CloseUnlockedArchive_Click" Padding="14,7" />
                                 </WrapPanel>
                             </Grid>
-                        </Grid>
+                            </Grid>
+                        </ScrollViewer>
 
                         <StackPanel x:Name="DestinationPanel" Grid.Row="3" Margin="0,13,0,0">
                             <TextBlock Text="保存位置" FontWeight="SemiBold" Margin="0,0,0,6" />

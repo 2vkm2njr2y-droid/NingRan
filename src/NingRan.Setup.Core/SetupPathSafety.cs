@@ -16,7 +16,7 @@ public static class SetupPathSafety
         if (!string.Equals(fullPath, expectedPath, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                $"为防止其他 Windows 用户替换程序文件，凝然加密只能安装到受保护的系统位置：{expectedPath}");
+                $"为防止其他 Windows 用户替换程序文件，{SetupProduct.Name}只能安装到受保护的系统位置：{expectedPath}");
         }
 
         ValidateExistingPathSegments(fullPath);
@@ -29,7 +29,7 @@ public static class SetupPathSafety
         var userDataPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(SetupProduct.UserDataPath));
         if (IsSameOrParent(fullPath, userDataPath) || IsSameOrParent(userDataPath, fullPath))
         {
-            throw new InvalidOperationException("安装位置不能与凝然加密的身份和设置保存位置重叠。");
+            throw new InvalidOperationException($"安装位置不能与{SetupProduct.Name}的数据保存位置重叠。");
         }
 
         if (Directory.Exists(fullPath))
@@ -48,7 +48,7 @@ public static class SetupPathSafety
             if (Directory.EnumerateFileSystemEntries(fullPath).Any() &&
                 (!allowExistingInstall || InstallState.TryLoad(fullPath) is null))
             {
-                throw new InvalidOperationException("所选文件夹不是空文件夹，也不是现有的凝然加密安装位置。请新建一个空文件夹。");
+                throw new InvalidOperationException($"所选文件夹不是空文件夹，也不是现有的{SetupProduct.Name}安装位置。请新建一个空文件夹。");
             }
         }
         else if (File.Exists(fullPath))
@@ -66,7 +66,7 @@ public static class SetupPathSafety
         var expectedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(SetupProduct.DefaultInstallPath));
         if (!string.Equals(fullPath, expectedPath, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("安装位置不是当前用户的凝然加密专用目录，已停止操作。");
+            throw new InvalidOperationException($"安装位置不是当前用户的{SetupProduct.Name}专用目录，已停止操作。");
         }
 
         ValidateExistingPathSegments(fullPath);
@@ -233,7 +233,7 @@ public static class SetupPathSafety
         }
 
         var state = InstallState.TryLoad(fullPath)
-            ?? throw new InvalidOperationException("没有找到有效的凝然加密安装记录，已停止卸载。");
+            ?? throw new InvalidOperationException($"没有找到有效的{SetupProduct.Name}安装记录，已停止卸载。");
         if (!File.Exists(Path.Combine(fullPath, SetupProduct.MainExecutableName)))
         {
             throw new InvalidOperationException("安装文件不完整，已停止自动删除。可以重新安装后再卸载。");
@@ -320,7 +320,9 @@ public static class SetupPathSafety
         // the required Builtin Users read-and-execute rule as writable access.
         var dangerous = FileSystemRights.Write |
             FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles |
-            FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
+            FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership |
+            (FileSystemRights)0x10000000 | // GENERIC_ALL
+            (FileSystemRights)0x40000000;  // GENERIC_WRITE
         foreach (FileSystemAccessRule rule in security.GetAccessRules(
                      includeExplicit: true,
                      includeInherited: true,

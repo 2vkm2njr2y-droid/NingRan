@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Media3D;
 using Microsoft.Win32;
 using NingRan.Core;
 
@@ -14,13 +15,14 @@ namespace NingRan.Windows;
 
 public partial class MainWindow : Window
 {
-    private const string AppName = "凝然加密";
+    private static string AppName => UiLanguage.ProductName;
     private const double PreferredWindowWidth = 1420;
     private const double PreferredWindowHeight = 920;
     private const double WorkAreaGap = 40;
     private readonly NrKeyFileService _keyFileService = new();
     private readonly NrIdentityService _identityService = new();
     private readonly NrTrustedContactService _trustedContactService;
+    private readonly TrustedContactBrokerClient _trustedContactBrokerClient;
     private readonly NrPhysicalDeviceService _physicalDeviceService = new();
     private readonly NrArchiveService _archiveService;
     private readonly Effect? _normalWindowEffect;
@@ -41,6 +43,8 @@ public partial class MainWindow : Window
     private bool _closingAnimationActive;
     private bool _closingAnimationComplete;
     private readonly bool _allowElevatedMediaBrowsing;
+    private readonly HashSet<MediaPlaybackHost> _activeExternalMediaViewers = [];
+    private MediaViewerFailurePreferences _mediaViewerFailurePreferences = new();
 
     public MainWindow(bool allowElevatedMediaBrowsing = false)
     {
@@ -48,7 +52,9 @@ public partial class MainWindow : Window
         _allowElevatedMediaBrowsing = allowElevatedMediaBrowsing;
         _strictProtectionSettings = StrictProtectionSettings.Load();
         _strictProtection.AlertRaised += StrictProtection_AlertRaised;
+        _strictProtection.HealthFailed += StrictProtection_HealthFailed;
         _trustedContactService = new NrTrustedContactService(_identityService);
+        _trustedContactBrokerClient = new TrustedContactBrokerClient(_trustedContactService);
         _archiveService = new NrArchiveService(
             keyFileService: _keyFileService,
             identityService: _identityService,
@@ -57,15 +63,39 @@ public partial class MainWindow : Window
         _normalWindowEffect = WindowFrame.Effect;
         if (_allowElevatedMediaBrowsing)
         {
-            Title = "凝然加密 - 高安全查看";
+            Title = $"{AppName} - {(UiLanguage.IsEnglish ? "High-security view" : "高安全查看")}";
+            AllowDrop = false;
+            SourceDropArea.IsEnabled = false;
+            SourceDropArea.Opacity = 0.55;
+            PickFolderButton.Visibility = Visibility.Collapsed;
+            PickFileButton.Content = UiLanguage.IsEnglish ? "Choose .nrenc encrypted file" : "选择 .nrenc 加密文件";
             EncryptRadio.IsEnabled = false;
             DecryptRadio.IsChecked = true;
+            StrictProtectionButton.Visibility = Visibility.Collapsed;
+            PickSenderPublicIdentityButton.Visibility = Visibility.Collapsed;
+            ManageTrustedContactsButton.Visibility = Visibility.Collapsed;
+            ManagePhysicalDevicesButton.Visibility = Visibility.Collapsed;
             HighSecurityStatusText.Text = WindowsSecureExecution.GetStatus().Message +
-                " 高安全查看不接收普通窗口的密码或密匙，并限制导出和修改。";
+                (UiLanguage.IsEnglish
+                    ? " High-security view does not receive passwords or keys from the ordinary window and limits export and editing."
+                    : " 高安全查看不接收普通窗口的密码或密匙，并限制导出和修改。");
         }
-        RefreshIdentityList();
-        MigrateTrustedContactStorage();
-        RefreshPhysicalDeviceList();
+        else
+        {
+            _mediaViewerFailurePreferences = MediaViewerFailurePreferences.Load();
+            RefreshIdentityList();
+            MigrateTrustedContactStorage();
+        }
+        if (_allowElevatedMediaBrowsing)
+        {
+            // 高安全管理员窗口不读取普通用户的 LocalAppData 设备清单。
+            // 归档查看仍会在用户明确选择物理保护时按归档要求验证设备。
+            EncryptPhysicalDeviceList.ItemsSource = Array.Empty<PhysicalDeviceDescriptor>();
+        }
+        else
+        {
+            RefreshPhysicalDeviceList();
+        }
         SourceInitialized += MainWindow_SourceInitialized;
         ContentRendered += MainWindow_ContentRendered;
         Loaded += MainWindow_Loaded;
@@ -97,6 +127,14 @@ public partial class MainWindow : Window
         _ => SizePaddingMode.None,
     };
 
+    private ArchiveCompressionLevel CurrentCompression => CompressionCombo.SelectedIndex switch
+    {
+        0 => ArchiveCompressionLevel.Store,
+        1 => ArchiveCompressionLevel.Fastest,
+        3 => ArchiveCompressionLevel.Maximum,
+        _ => ArchiveCompressionLevel.Standard,
+    };
+
     private IdentitySummary? SelectedSigningIdentity =>
         SigningIdentityCombo.SelectedItem as IdentitySummary;
 
@@ -113,8 +151,8 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = "选择需要加密或解密的文件",
-            Filter = "所有文件|*.*|凝然加密文件|*.nrenc",
+            Title = _allowElevatedMediaBrowsing ? "选择需要高安全查看的凝然加密文件" : "选择需要加密或解密的文件",
+            Filter = _allowElevatedMediaBrowsing ? "凝然加密文件|*.nrenc" : "所有文件|*.*|凝然加密文件|*.nrenc",
             CheckFileExists = true,
         };
         if (dialog.ShowDialog(this) == true)
@@ -125,6 +163,12 @@ public partial class MainWindow : Window
 
     private async void PickFolder_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         var dialog = new OpenFolderDialog
         {
             Title = "选择需要加密的文件夹",
@@ -158,6 +202,12 @@ public partial class MainWindow : Window
 
     private async void PickSenderPublicIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         var dialog = new OpenFileDialog
         {
             Title = "选择发送者提供的公开身份文件",
@@ -171,21 +221,17 @@ public partial class MainWindow : Window
 
         try
         {
-            var info = _identityService.ReadPublicIdentityInfo(dialog.FileName);
             var trustedContact = _trustedContactService.FindTrustedContactForPublicIdentity(dialog.FileName);
             if (trustedContact is null)
             {
-                if (!ConfirmPublicIdentityTrust(info))
+                SetBusy(true);
+                trustedContact = await _trustedContactBrokerClient.TrustAsync(dialog.FileName);
+                SetBusy(false);
+                if (trustedContact is null)
                 {
                     ClearTrustedSenderSelection();
                     return;
                 }
-
-                SetBusy(true);
-                trustedContact = await _trustedContactService.TrustPublicIdentityAsync(
-                    dialog.FileName,
-                    userExplicitlyConfirmed: true);
-                SetBusy(false);
             }
 
             SenderPublicIdentityPathInput.Text = trustedContact.DisplayText;
@@ -201,20 +247,17 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool ConfirmPublicIdentityTrust(PublicIdentityInfo info)
-    {
-        var dialog = new PublicIdentityVerificationDialog(info.Name, info.VerificationCode)
-        {
-            Owner = this,
-        };
-        return dialog.ShowDialog() == true;
-    }
-
     private void ManageTrustedContacts_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         try
         {
-            var dialog = new TrustedContactsDialog(_trustedContactService) { Owner = this };
+            var dialog = new TrustedContactsDialog(_trustedContactService, _trustedContactBrokerClient) { Owner = this };
             dialog.ShowDialog();
             if (_detectedArchiveInfo.HasSenderSignature)
             {
@@ -229,6 +272,12 @@ public partial class MainWindow : Window
 
     private void ManagePhysicalDevices_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy)
         {
             return;
@@ -269,6 +318,12 @@ public partial class MainWindow : Window
 
     private async void CreateKey_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy)
         {
             return;
@@ -330,6 +385,12 @@ public partial class MainWindow : Window
 
     private async void CreateIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy)
         {
             return;
@@ -370,6 +431,12 @@ public partial class MainWindow : Window
 
     private async void ImportIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy)
         {
             return;
@@ -395,6 +462,12 @@ public partial class MainWindow : Window
         {
             var fullPath = Path.GetFullPath(path);
             var extension = Path.GetExtension(fullPath);
+            if (_allowElevatedMediaBrowsing &&
+                !string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("高安全查看只接受凝然加密文件，不导入或修改身份、联系人及其他设置。");
+            }
+
             if (string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase))
             {
                 await SetSourceAsync(fullPath);
@@ -501,7 +574,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var info = _identityService.ReadPublicIdentityInfo(path);
         var trustedContact = _trustedContactService.FindTrustedContactForPublicIdentity(path);
         if (trustedContact is not null)
         {
@@ -510,18 +582,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!ConfirmPublicIdentityTrust(info))
-        {
-            return;
-        }
-
         try
         {
             SetBusy(true);
             Mouse.OverrideCursor = Cursors.Wait;
-            trustedContact = await _trustedContactService.TrustPublicIdentityAsync(
-                path,
-                userExplicitlyConfirmed: true);
+            trustedContact = await _trustedContactBrokerClient.TrustAsync(path);
+            if (trustedContact is null)
+            {
+                return;
+            }
+
             MessageBox.Show(this, $"发送者身份“{trustedContact.Name}”已经加入可信联系人。",
                 AppName, MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -534,6 +604,12 @@ public partial class MainWindow : Window
 
     private async void ExportPrivateIdentityBackup_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy || SelectedSigningIdentity is not { } identity)
         {
             MessageBox.Show(this, "请先选择一个发送者身份。", AppName,
@@ -589,6 +665,12 @@ public partial class MainWindow : Window
 
     private async void ExportPublicIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy || SelectedSigningIdentity is not { } identity)
         {
             MessageBox.Show(this, "请先选择一个发送者身份。", AppName,
@@ -634,6 +716,12 @@ public partial class MainWindow : Window
 
     private async void DeleteIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy || SelectedSigningIdentity is not { } identity)
         {
             MessageBox.Show(this, "请先选择要删除的发送者身份。", AppName,
@@ -688,6 +776,14 @@ public partial class MainWindow : Window
     {
         if (_isBusy)
         {
+            return;
+        }
+
+        if (_allowElevatedMediaBrowsing &&
+            (IsEncrypting || string.IsNullOrWhiteSpace(_sourcePath) || !File.Exists(_sourcePath) ||
+             !string.Equals(Path.GetExtension(_sourcePath), ".nrenc", StringComparison.OrdinalIgnoreCase)))
+        {
+            ShowHighSecurityViewingOnlyMessage();
             return;
         }
 
@@ -867,6 +963,7 @@ public partial class MainWindow : Window
                         CurrentMode,
                         CurrentKeyFilePath,
                         CurrentSizePadding,
+                        CurrentCompression,
                         SignIdentityCheck.IsChecked == true ? SelectedSigningIdentity?.Id : null,
                         SignIdentityCheck.IsChecked == true ? signingPassword : null,
                         CurrentMode == EncryptionMode.PhysicalDevice ? SelectedPhysicalDevices : null,
@@ -1086,6 +1183,28 @@ public partial class MainWindow : Window
 
         if (entry.MediaKind is not null)
         {
+            if (_allowElevatedMediaBrowsing && entry.MediaKind is
+                    SecureMediaKind.Audio or SecureMediaKind.Video or SecureMediaKind.Pdf)
+            {
+                MessageBox.Show(
+                    this,
+                    "高安全查看不会加载浏览器或第三方播放插件，因此暂不打开音频、视频和 PDF。您仍可在高安全窗口查看文字和常见图片；如需查看此文件，请关闭高安全窗口后在普通窗口打开。",
+                    "凝然加密 - 高安全查看",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+            if (_strictProtection.IsRunning && entry.MediaKind == SecureMediaKind.Pdf)
+            {
+                MessageBox.Show(
+                    this,
+                    "严格防护运行时不会把解密内容交给无法纳入内存监控的 PDF 浏览器进程，因此暂不打开 PDF。关闭严格防护后可在普通窗口查看。",
+                    "凝然加密 - 严格防护",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
             var parentPath = GetArchiveParentPath(entry.RelativePath) ?? string.Empty;
             var mediaEntries = _archiveSession.Entries
                 .Where(candidate => !candidate.IsDirectory && candidate.MediaKind is not null &&
@@ -1093,6 +1212,22 @@ public partial class MainWindow : Window
                                         StringComparison.OrdinalIgnoreCase))
                 .OrderBy(candidate => candidate.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();
+            var externalMediaEntries = mediaEntries.Where(IsSupportedByExternalMediaViewer).ToArray();
+            // 管理员高安全窗口绝不能启动外部进程。即使外部查看器路径或
+            // 启动逻辑以后发生变化，这里也始终回退到当前进程内的查看器。
+            if (!_allowElevatedMediaBrowsing && !_strictProtection.IsRunning &&
+                IsSupportedByExternalMediaViewer(entry))
+            {
+                var launch = await TryOpenWithExternalMediaViewerAsync(externalMediaEntries, entry);
+                if (launch.Started) return;
+                ShowExternalMediaViewerFailure(launch);
+            }
+            if (entry.MediaKind == SecureMediaKind.Pdf)
+            {
+                var pdfViewer = new SecurePdfViewerWindow(_archiveSession, entry) { Owner = this };
+                pdfViewer.ShowDialog();
+                return;
+            }
             var viewer = new SecureMediaViewerWindow(_archiveSession, mediaEntries, entry) { Owner = this };
             viewer.ShowDialog();
             return;
@@ -1365,6 +1500,7 @@ public partial class MainWindow : Window
             identity.Id,
             signingPassword,
             CurrentKeyFilePath,
+            CurrentCompression,
             removals,
             additions,
             new WindowInteropHelper(this).Handle);
@@ -1520,24 +1656,43 @@ public partial class MainWindow : Window
     {
         if (_isBusy)
         {
-            MessageBox.Show(this, "请先等待当前操作完成，再调整严格防护设置。", AppName,
+            MessageBox.Show(this, UiLanguage.IsEnglish ? "Wait for the current operation to finish before changing Strict Protection settings." : "请先等待当前操作完成，再调整严格防护设置。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        var dialog = new StrictProtectionDialog(_strictProtectionSettings) { Owner = this };
-        if (dialog.ShowDialog() != true)
+        try
         {
+            if (!await StrictProtectionSettings.OpenProtectedEditorAsync())
+            {
+                return;
+            }
+        }
+        catch (System.ComponentModel.Win32Exception exception) when (HighSecurityLaunch.WasCancelled(exception))
+        {
+            MessageBox.Show(this, UiLanguage.IsEnglish ? "Windows administrator confirmation was canceled. Strict Protection settings were not changed." : "Windows 管理员确认已取消，严格防护设置没有改变。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        catch (Exception exception)
+        {
+            ShowFriendlyError("无法修改严格防护设置", exception);
             return;
         }
 
-        _strictProtectionSettings = dialog.Settings;
-        _strictProtectionSettings.Save();
+        _strictProtectionSettings = StrictProtectionSettings.Load();
+        if (!string.IsNullOrWhiteSpace(_strictProtectionSettings.LoadFailureReason))
+        {
+            MessageBox.Show(this, _strictProtectionSettings.LoadFailureReason, AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         if (_strictProtectionSettings.Enabled)
         {
             if (!await EnableStrictProtectionAsync())
             {
-                MessageBox.Show(this, $"设置已经记住，但本次未能启动监控。\n\n原因：{GetStrictProtectionFailureReason()}\n\n下次启动时会再次请求管理员确认。",
+                MessageBox.Show(this, UiLanguage.IsEnglish
+                        ? $"The setting was saved, but monitoring could not start this time.\n\nReason: {GetStrictProtectionFailureReason()}\n\nAdministrator confirmation will be requested again next time."
+                        : $"设置已经记住，但本次未能启动监控。\n\n原因：{GetStrictProtectionFailureReason()}\n\n下次启动时会再次请求管理员确认。",
                     AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
@@ -1557,9 +1712,23 @@ public partial class MainWindow : Window
         }
 
         _strictStartupAttempted = true;
+        if (_allowElevatedMediaBrowsing)
+        {
+            // 高完整性窗口已由 Windows 隔离普通权限进程；不再启动会写用户日志的额外管理员监控。
+            RefreshStrictProtectionButton();
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_strictProtectionSettings.LoadFailureReason))
+        {
+            MessageBox.Show(this, _strictProtectionSettings.LoadFailureReason, AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         if (_strictProtectionSettings.Enabled && !await EnableStrictProtectionAsync())
         {
-            MessageBox.Show(this, $"上次已开启严格防护，但本次监控没有启动。\n\n原因：{GetStrictProtectionFailureReason()}\n\n您可以稍后点击“严格防护”再次启动。",
+            MessageBox.Show(this, UiLanguage.IsEnglish
+                    ? $"Strict Protection was enabled previously, but monitoring did not start this time.\n\nReason: {GetStrictProtectionFailureReason()}\n\nClick Strict Protection later to start it again."
+                    : $"上次已开启严格防护，但本次监控没有启动。\n\n原因：{GetStrictProtectionFailureReason()}\n\n您可以稍后点击“严格防护”再次启动。",
                 AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
@@ -1573,51 +1742,72 @@ public partial class MainWindow : Window
             return true;
         }
 
+        foreach (var viewer in _activeExternalMediaViewers.ToArray())
+        {
+            await viewer.DisposeAsync();
+            _activeExternalMediaViewers.Remove(viewer);
+        }
+
         var started = await _strictProtection.StartAsync(_strictProtectionSettings);
         if (started)
         {
             _strictThreatHandled = false;
         }
-        if (started && !_strictProtectionSettings.Enabled)
-        {
-            _strictProtectionSettings = new StrictProtectionSettings
-            {
-                Enabled = true,
-                AllowedProcessPaths = _strictProtectionSettings.AllowedProcessPaths,
-            };
-            _strictProtectionSettings.Save();
-        }
-
         RefreshStrictProtectionButton();
         return started;
     }
 
-    private string GetStrictProtectionFailureReason() => _strictProtection.LastFailureReason ?? "没有收到监控程序的启动确认。";
+    private string GetStrictProtectionFailureReason() =>
+        _strictProtection.LastFailureReason is { } reason
+            ? UiLanguage.Translate(reason)
+            : UiLanguage.IsEnglish ? "No startup confirmation was received from the monitor." : "没有收到监控程序的启动确认。";
 
     private void StrictProtection_AlertRaised(object? sender, StrictProtectionAlert alert)
     {
-        _ = Dispatcher.InvokeAsync(async () =>
-        {
-            if (_strictThreatHandled)
-            {
-                return;
-            }
+        _ = Dispatcher.InvokeAsync(() => HandleStrictProtectionFailureAsync(alert, null));
+    }
 
-            _strictThreatHandled = true;
-            try
+    private void StrictProtection_HealthFailed(object? sender, StrictProtectionHealthFailureEventArgs failure)
+    {
+        _ = Dispatcher.InvokeAsync(() => HandleStrictProtectionFailureAsync(null, failure.Reason));
+    }
+
+    private async Task HandleStrictProtectionFailureAsync(StrictProtectionAlert? alert, string? healthFailureReason)
+    {
+        if (_strictThreatHandled)
+        {
+            return;
+        }
+
+        _strictThreatHandled = true;
+        try
+        {
+            if (alert is not null)
             {
                 SecurityEventLog.Append(alert);
             }
-            catch
+            else
             {
-                // 即使日志位置不可用，也必须继续停止操作和清理明文。
+                SecurityEventLog.AppendRuntimeFailure(healthFailureReason ?? "监控连接意外停止。");
             }
-            _progressWindow?.SetCancelling();
-            _operationCancellation?.Cancel();
-            CloseArchiveSession();
-            await _strictProtection.StopAsync();
+        }
+        catch
+        {
+            // 即使日志位置不可用，也必须继续停止操作和清理明文。
+        }
+        _progressWindow?.SetCancelling();
+        _operationCancellation?.Cancel();
+        CloseArchiveSession();
+        await _strictProtection.StopAsync();
 
-            TemporaryContentCleanupResult cleanup;
+        TemporaryContentCleanupResult cleanup;
+        if (NingRanRuntime.IsProcessElevated())
+        {
+            // 管理员高安全窗口不接触普通用户的恢复登记目录。
+            cleanup = new TemporaryContentCleanupResult(0, []);
+        }
+        else
+        {
             try
             {
                 cleanup = await Task.Run(NrArchiveService.CleanupAbandonedTemporaryContent);
@@ -1627,18 +1817,32 @@ public partial class MainWindow : Window
                 cleanup = new TemporaryContentCleanupResult(0,
                     [new TemporaryContentCleanupFailure("临时明文清理", exception.Message)]);
             }
+        }
 
+        var cleanupResult = cleanup.Failures.Count == 0
+            ? (UiLanguage.IsEnglish ? "The current operation was stopped and temporary plaintext was cleaned." : "已停止当前操作，并已执行临时明文清理。")
+            : (UiLanguage.IsEnglish ? $"The current operation was stopped; {cleanup.Failures.Count} temporary items will continue cleaning next time." : $"已停止当前操作；有 {cleanup.Failures.Count} 项临时内容将由下次启动继续清理。");
+        if (alert is not null)
+        {
             var processName = string.IsNullOrWhiteSpace(alert.ProcessPath)
-                ? $"进程编号 {alert.ProcessId}"
+                ? (UiLanguage.IsEnglish ? $"Process ID {alert.ProcessId}" : $"进程编号 {alert.ProcessId}")
                 : alert.ProcessPath;
-            var cleanupResult = cleanup.Failures.Count == 0
-                ? "已停止当前操作，并已执行临时明文清理。"
-                : $"已停止当前操作；有 {cleanup.Failures.Count} 项临时内容将由下次启动继续清理。";
             MessageBox.Show(this,
-                $"严格防护发现未允许的软件仍持有受保护内存读取权限：\n\n访问程序：{processName}\n被访问组件：{alert.TargetComponent}\n\n{cleanupResult}\n事件已记录到安全日志。此功能用于发现和缩短风险，不能保证拦截一次极短的读取。",
-                "严格防护已执行清理", MessageBoxButton.OK, MessageBoxImage.Warning);
-            RefreshStrictProtectionButton();
-        });
+                UiLanguage.IsEnglish
+                    ? $"Strict Protection found that unapproved software still has read access to protected memory.\n\nAccessing process: {processName}\nAccessed component: {alert.TargetComponent}\n\n{cleanupResult}\nThe event was recorded in the security log. This feature helps detect and shorten exposure but cannot guarantee blocking an extremely brief read."
+                    : $"严格防护发现未允许的软件仍持有受保护内存读取权限：\n\n访问程序：{processName}\n被访问组件：{alert.TargetComponent}\n\n{cleanupResult}\n事件已记录到安全日志。此功能用于发现和缩短风险，不能保证拦截一次极短的读取。",
+                UiLanguage.IsEnglish ? "Strict Protection cleanup executed" : "严格防护已执行清理", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        else
+        {
+            MessageBox.Show(this,
+                UiLanguage.IsEnglish
+                    ? $"Strict Protection monitoring stopped unexpectedly.\n\n{UiLanguage.Translate(healthFailureReason)}\n\n{cleanupResult}\n\nRestart Strict Protection before continuing to handle sensitive content."
+                    : $"严格防护监控已经意外停止：\n\n{healthFailureReason}\n\n{cleanupResult}\n\n请重新开启严格防护后再继续处理敏感内容。",
+                UiLanguage.IsEnglish ? "Strict Protection failed and cleanup executed" : "严格防护已失效并执行清理", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        RefreshStrictProtectionButton();
     }
 
     private void RefreshStrictProtectionButton()
@@ -1648,16 +1852,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        StrictProtectionButton.Content = _strictProtection.IsRunning ? "严格防护：已开启" : "严格防护";
-        StrictProtectionButton.ToolTip = _strictProtection.IsRunning
-            ? "严格防护监控正在运行：发现后会停止操作并清理"
-            : _strictProtectionSettings.Enabled
-                ? "严格防护已记住，但本次监控尚未启动"
-                : "设置严格防护监控和允许的软件";
+        StrictProtectionButton.Content = UiLanguage.IsEnglish
+            ? (_strictProtection.IsRunning ? "Strict Protection: On" : "Strict Protection")
+            : (_strictProtection.IsRunning ? "严格防护：已开启" : "严格防护");
+        StrictProtectionButton.ToolTip = UiLanguage.IsEnglish
+            ? (_strictProtection.IsRunning
+                ? "Strict Protection monitoring is running: detected threats stop the operation and clean up"
+                : _strictProtectionSettings.Enabled
+                    ? "Strict Protection is enabled but monitoring has not started this time"
+                    : "Configure Strict Protection monitoring")
+            : (_strictProtection.IsRunning
+                ? "严格防护监控正在运行：发现后会停止操作并清理"
+                : _strictProtectionSettings.Enabled
+                    ? "严格防护已记住，但本次监控尚未启动"
+                    : "设置严格防护监控");
     }
 
     private void CloseArchiveSession()
     {
+        foreach (var viewer in _activeExternalMediaViewers.ToArray())
+        {
+            _ = viewer.DisposeAsync();
+        }
+        _activeExternalMediaViewers.Clear();
         var session = _archiveSession;
         _archiveSession = null;
         _physicalOperationActive = false;
@@ -1681,8 +1898,87 @@ public partial class MainWindow : Window
         SecureMediaKind.Image => "🖼️",
         SecureMediaKind.Audio => "🎵",
         SecureMediaKind.Video => "🎬",
+        SecureMediaKind.Pdf => "PDF",
         _ => "📄",
     };
+
+    private static bool IsSupportedByExternalMediaViewer(SecureArchiveEntry entry) =>
+        MediaPlaybackHost.CanOpenWithExternalViewer(entry);
+
+    private async Task<ExternalMediaViewerLaunchResult> TryOpenWithExternalMediaViewerAsync(
+        IReadOnlyList<SecureArchiveEntry> mediaEntries,
+        SecureArchiveEntry initialEntry)
+    {
+        var playerPath = MediaPlaybackHost.FindExternalViewer();
+        if (playerPath is null || _archiveSession is null)
+        {
+            // 未安装播放器属于正常情况，调用处会自动打开内置播放器。
+            return new ExternalMediaViewerLaunchResult(false, "viewer-not-found", null);
+        }
+
+        var host = new MediaPlaybackHost(_archiveSession, mediaEntries, initialEntry);
+        _activeExternalMediaViewers.Add(host);
+        try
+        {
+            await host.StartAsync(playerPath);
+            _ = ObserveExternalMediaViewerAsync(host, initialEntry.Name);
+            return new ExternalMediaViewerLaunchResult(true, null, null);
+        }
+        catch (Exception exception)
+        {
+            _activeExternalMediaViewers.Remove(host);
+            await host.DisposeAsync();
+            var (problemId, reason) = exception switch
+            {
+                TimeoutException => ("secure-session-timeout", "查看器已启动，但五秒内没有完成内部安全连接。请确认安装的是最新版凝然媒体查看器。"),
+                FileNotFoundException => ("viewer-file-missing", "Windows 记录的媒体查看器文件已不存在或无法读取。请重新安装查看器。"),
+                _ => ($"viewer-start-{exception.GetType().Name}", $"查看器没有成功建立安全连接：{exception.Message}"),
+            };
+            return new ExternalMediaViewerLaunchResult(false, problemId, reason);
+        }
+    }
+
+    private void ShowExternalMediaViewerFailure(ExternalMediaViewerLaunchResult result)
+    {
+        if (result.Started || string.IsNullOrWhiteSpace(result.ProblemId) || string.IsNullOrWhiteSpace(result.Reason) ||
+            _mediaViewerFailurePreferences.IsIgnored(result.ProblemId))
+        {
+            return;
+        }
+        if (MediaViewerFailureNotice.Show(this, result.Reason))
+        {
+            _mediaViewerFailurePreferences = _mediaViewerFailurePreferences.Ignore(result.ProblemId);
+        }
+    }
+
+    private async Task ObserveExternalMediaViewerAsync(MediaPlaybackHost host, string fileName)
+    {
+        int? abnormalExitCode = null;
+        try
+        {
+            var exitCode = await host.WaitForExitAsync();
+            if (exitCode != 0) abnormalExitCode = exitCode;
+        }
+        catch
+        {
+            // 主窗口正在关闭或严格防护正在清理时，查看器会被主动停止。
+        }
+        finally
+        {
+            _activeExternalMediaViewers.Remove(host);
+            await host.DisposeAsync();
+        }
+
+        if (abnormalExitCode is not null && IsLoaded && !_closingAnimationComplete)
+        {
+            await Dispatcher.InvokeAsync(() => ShowExternalMediaViewerFailure(new ExternalMediaViewerLaunchResult(
+                false,
+                $"viewer-exited-{abnormalExitCode.Value}",
+                $"查看器在查看“{fileName}”时意外退出（代码 {abnormalExitCode.Value}）。文件仍保持加密，未创建普通副本。")));
+        }
+    }
+
+    private sealed record ExternalMediaViewerLaunchResult(bool Started, string? ProblemId, string? Reason);
 
     private void CloseProgressWindow()
     {
@@ -1698,12 +1994,25 @@ public partial class MainWindow : Window
 
     private void Window_DragOver(object sender, DragEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
         e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
     private async void Window_Drop(object sender, DragEventArgs e)
     {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         if (_isBusy || !e.Data.GetDataPresent(DataFormats.FileDrop) ||
             e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0)
         {
@@ -1729,6 +2038,14 @@ public partial class MainWindow : Window
     private async Task SetSourceAsync(string path)
     {
         var selectedPath = Path.GetFullPath(path);
+        if (_allowElevatedMediaBrowsing &&
+            (!File.Exists(selectedPath) ||
+             !string.Equals(Path.GetExtension(selectedPath), ".nrenc", StringComparison.OrdinalIgnoreCase)))
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
         CloseArchiveSession();
         _sourcePath = selectedPath;
         _detectedArchiveMode = EncryptionMode.Standard;
@@ -1848,10 +2165,22 @@ public partial class MainWindow : Window
         }
 
         var archiveUnlocked = _archiveSession is not null;
+        SettingsScrollViewer.VerticalScrollBarVisibility = archiveUnlocked
+            ? ScrollBarVisibility.Disabled
+            : ScrollBarVisibility.Hidden;
+        SettingsScrollViewer.PanningMode = archiveUnlocked
+            ? PanningMode.None
+            : PanningMode.VerticalOnly;
+        if (archiveUnlocked)
+        {
+            SettingsScrollViewer.ScrollToTop();
+        }
         EncryptSettingsPanel.Visibility = !archiveUnlocked && IsEncrypting ? Visibility.Visible : Visibility.Collapsed;
         DecryptSettingsPanel.Visibility = !archiveUnlocked && !IsEncrypting ? Visibility.Visible : Visibility.Collapsed;
         UnlockedArchivePanel.Visibility = archiveUnlocked ? Visibility.Visible : Visibility.Collapsed;
-        DestinationPanel.Visibility = archiveUnlocked ? Visibility.Collapsed : Visibility.Visible;
+        DestinationPanel.Visibility = archiveUnlocked || _allowElevatedMediaBrowsing
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         EncryptAdvancedKeyPanel.Visibility =
             IsEncrypting && AdvancedRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         EncryptPhysicalDevicePanel.Visibility =
@@ -1875,6 +2204,58 @@ public partial class MainWindow : Window
         ArchiveEditingPanel.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
         ExportAllUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
         AppendFilesToUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void SettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_archiveSession is null || e.OriginalSource is not DependencyObject source ||
+            IsDescendantOf(source, UnlockedFileTree))
+        {
+            return;
+        }
+
+        e.Handled = true;
+    }
+
+    private void UnlockedFileTree_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var scrollViewer = FindVisualChild<ScrollViewer>(UnlockedFileTree);
+        if (scrollViewer is null || scrollViewer.ScrollableHeight <= 0)
+        {
+            return;
+        }
+
+        // Drive the tree's own scrolling so hidden chrome cannot restrict the last rows.
+        var line = Math.Max(24, scrollViewer.ViewportHeight > 0 ? scrollViewer.ViewportHeight / 10 : 32);
+        var nextOffset = scrollViewer.VerticalOffset - (e.Delta / 120d * line);
+        scrollViewer.ScrollToVerticalOffset(Math.Clamp(nextOffset, 0, scrollViewer.ScrollableHeight));
+        e.Handled = true;
+    }
+
+    private static bool IsDescendantOf(DependencyObject source, DependencyObject ancestor)
+    {
+        for (var current = source; current is not null; current = current is Visual || current is Visual3D
+                 ? VisualTreeHelper.GetParent(current)
+                 : LogicalTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor)) return true;
+        }
+
+        return false;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? source) where T : DependencyObject
+    {
+        if (source is null) return null;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(source); index++)
+        {
+            var child = VisualTreeHelper.GetChild(source, index);
+            if (child is T found) return found;
+            var nested = FindVisualChild<T>(child);
+            if (nested is not null) return nested;
+        }
+
+        return null;
     }
 
     private void HighSecurityOpen_Click(object sender, RoutedEventArgs e)
@@ -1971,7 +2352,18 @@ public partial class MainWindow : Window
     {
         try
         {
-            _trustedContactService.ListTrustedContacts();
+            var pendingCount = _trustedContactService.ListContactsForManagement()
+                .Count(contact => contact.RequiresReverification);
+            if (pendingCount > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    $"发现 {pendingCount} 个升级前保存的联系人。为防止其他程序篡改，这些旧记录已暂停信任。\n\n" +
+                    "请打开“管理可信联系人”，逐个重新核对安全码。完成前，它们不会用于验证发送者。",
+                    AppName,
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
         catch (Exception exception)
         {
@@ -2202,6 +2594,7 @@ public partial class MainWindow : Window
             CloseArchiveSession();
             _windowSource?.RemoveHook(WindowMessageHook);
             _strictProtection.AlertRaised -= StrictProtection_AlertRaised;
+            _strictProtection.HealthFailed -= StrictProtection_HealthFailed;
             _ = _strictProtection.DisposeAsync();
             return;
         }

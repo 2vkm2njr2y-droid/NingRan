@@ -6,6 +6,7 @@ public enum SecureMediaKind
     Image,
     Audio,
     Video,
+    Pdf,
 }
 
 /// <summary>可由凝然内置阅读器或播放器直接处理的常见文件类型。</summary>
@@ -31,11 +32,16 @@ public static class NrMediaFiles
         ".mp4", ".m4v", ".mov", ".avi", ".wmv", ".webm", ".mkv", ".mpeg", ".mpg", ".3gp", ".ts", ".mpv",
     };
 
+    private static readonly HashSet<string> PdfExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf",
+    };
+
     public static bool IsSupportedPath(string path)
     {
         var extension = Path.GetExtension(path);
         return TextExtensions.Contains(extension) || ImageExtensions.Contains(extension) ||
-               AudioExtensions.Contains(extension) || VideoExtensions.Contains(extension);
+               AudioExtensions.Contains(extension) || VideoExtensions.Contains(extension) || PdfExtensions.Contains(extension);
     }
 
     public static SecureMediaKind? TryGetKind(string path)
@@ -45,6 +51,7 @@ public static class NrMediaFiles
         if (ImageExtensions.Contains(extension)) return SecureMediaKind.Image;
         if (AudioExtensions.Contains(extension)) return SecureMediaKind.Audio;
         if (VideoExtensions.Contains(extension)) return SecureMediaKind.Video;
+        if (PdfExtensions.Contains(extension)) return SecureMediaKind.Pdf;
         return null;
     }
 
@@ -79,6 +86,7 @@ public static class NrMediaFiles
         ".3gp" => "video/3gpp",
         ".ts" => "video/mp2t",
         ".mpv" => "video/mp4",
+        ".pdf" => "application/pdf",
         _ => "application/octet-stream",
     };
 }

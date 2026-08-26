@@ -12,7 +12,12 @@ public sealed record PublicIdentityInfo(string Name, string VerificationCode);
 public sealed record TrustedContactSummary(
     string Id,
     string Name,
-    DateTime TrustedAtUtc)
+    DateTime TrustedAtUtc,
+    string Fingerprint,
+    string UserSid,
+    bool RequiresReverification)
 {
-    public string DisplayText => Name;
+    public string DisplayText => RequiresReverification
+        ? $"{Name}（需要重新核对）"
+        : Name;
 }

@@ -84,8 +84,10 @@ public partial class SecureMediaViewerWindow : Window
         _initialEntry = initialEntry;
         InitializeComponent();
         ComponentDispatcher.ThreadPreprocessMessage += ViewerThreadPreprocessMessage;
-        TitleText.Text = "凝然加密 · 安全媒体播放器";
-        SubtitleText.Text = $"不保存明文 · 当前文件夹内有 {folderEntries.Count} 个可安全查看的媒体文件。";
+        TitleText.Text = UiLanguage.Translate("凝然加密 · 安全媒体播放器");
+        SubtitleText.Text = UiLanguage.IsEnglish
+            ? $"No plaintext is saved · {folderEntries.Count} media files can be viewed securely in this folder."
+            : $"不保存明文 · 当前文件夹内有 {folderEntries.Count} 个可安全查看的媒体文件。";
         _sessionCancellation = _session.CancellationToken.Register(() => Dispatcher.BeginInvoke(() =>
         {
             if (_closing) return;
@@ -99,7 +101,13 @@ public partial class SecureMediaViewerWindow : Window
         DockNativeControlBar();
         ApplyFilter();
         try { EnsureNativePlayer(); }
-        catch (Exception exception) { EmptyText.Text = $"内置播放器无法启动：{exception.Message}"; return; }
+        catch (Exception exception)
+        {
+            EmptyText.Text = UiLanguage.IsEnglish
+                ? $"Built-in player could not start: {exception.Message}"
+                : $"内置播放器无法启动：{exception.Message}";
+            return;
+        }
         var initial = _filteredEntries.FirstOrDefault(entry => string.Equals(entry.RelativePath, _initialEntry.RelativePath, StringComparison.OrdinalIgnoreCase));
         if (initial is null && _filteredEntries.Count > 0) initial = _filteredEntries[0];
         if (initial is null) return;
@@ -153,7 +161,7 @@ public partial class SecureMediaViewerWindow : Window
                 case SecureMediaKind.Image: await LoadImageAsync(entry); break;
                 case SecureMediaKind.Audio:
                 case SecureMediaKind.Video: await LoadPlayableMediaAsync(entry, loadVersion); break;
-                default: throw new InvalidOperationException("该文件不是可直接查看的媒体类型。");
+                default: throw new InvalidOperationException(UiLanguage.Translate("该文件不是可直接查看的媒体类型。"));
             }
         }
         catch (OperationCanceledException) when (loadVersion == _loadVersion) { Close(); }
@@ -164,8 +172,11 @@ public partial class SecureMediaViewerWindow : Window
             DisposeMediaCache();
             HideContentViews();
             EmptyView.Visibility = Visibility.Visible;
-            EmptyText.Text = $"无法在程序内打开此文件：{exception.Message}";
-            CrashReportDialog.ShowTemporary(this, "无法打开媒体", exception.Message, "安全媒体查看", exception);
+            EmptyText.Text = UiLanguage.IsEnglish
+                ? $"Could not open this file in the app: {exception.Message}"
+                : $"无法在程序内打开此文件：{exception.Message}";
+            CrashReportDialog.ShowTemporary(this, UiLanguage.Translate("无法打开媒体"), exception.Message,
+                UiLanguage.Translate("安全媒体查看"), exception);
         }
     }
 
@@ -198,10 +209,10 @@ public partial class SecureMediaViewerWindow : Window
         _nativeVideoAspect = 16d / 9d;
         NativeMediaHost.Visibility = Visibility.Visible;
         UpdateNativePresentationBounds();
-        SetNativeLoading(true, "正在安全加载视频…");
+        SetNativeLoading(true, UiLanguage.Translate("正在安全加载视频…"));
         await Dispatcher.Yield();
         EnsureNativePlayer();
-        if (_nativePlayer is null || _nativeVlc is null) throw new NingRanException("内置播放器尚未准备好，请稍后重试。");
+        if (_nativePlayer is null || _nativeVlc is null) throw new NingRanException(UiLanguage.Translate("播放核心尚未准备好，请稍后重试。"));
         var cache = new MediaReadAheadCache(_session, entry);
         _mediaCache = cache;
 
@@ -212,7 +223,7 @@ public partial class SecureMediaViewerWindow : Window
         }
         catch (TimeoutException exception)
         {
-            throw new NingRanException("媒体信息在 60 秒内未能准备完成，已停止播放以避免窗口卡死。", exception);
+            throw new NingRanException(UiLanguage.Translate("媒体信息在 60 秒内未能准备完成，已停止播放以避免窗口卡死。"), exception);
         }
 
         if (loadVersion != _loadVersion || !ReferenceEquals(_mediaCache, cache)) return;
@@ -224,7 +235,7 @@ public partial class SecureMediaViewerWindow : Window
         PlaybackRulePanel.Visibility = Visibility.Visible;
         if (!_nativePlayer!.Play(_nativeMedia))
         {
-            throw new NingRanException("播放核心未能开始读取媒体。");
+            throw new NingRanException(UiLanguage.Translate("播放核心未能开始读取媒体。"));
         }
         RevealNativeControls();
     }
@@ -233,7 +244,12 @@ public partial class SecureMediaViewerWindow : Window
     {
         _nativeViewReady = true;
         try { EnsureNativePlayer(); }
-        catch (Exception exception) { EmptyText.Text = $"内置播放器无法启动：{exception.Message}"; }
+        catch (Exception exception)
+        {
+            EmptyText.Text = UiLanguage.IsEnglish
+                ? $"Built-in player could not start: {exception.Message}"
+                : $"内置播放器无法启动：{exception.Message}";
+        }
     }
 
     private void DockNativeControlBar()
@@ -256,7 +272,15 @@ public partial class SecureMediaViewerWindow : Window
     {
         if (_nativePlayer is not null) return;
         if (!_nativeViewReady) return;
-        LibVLCSharp.Shared.Core.Initialize();
+        if (NingRanRuntime.IsProcessElevated()) return;
+        Environment.SetEnvironmentVariable("VLC_PLUGIN_PATH", null, EnvironmentVariableTarget.Process);
+        var nativeDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64"));
+        if (!File.Exists(Path.Combine(nativeDirectory, "libvlc.dll")) ||
+            !Directory.Exists(Path.Combine(nativeDirectory, "plugins")))
+        {
+            throw new NingRanException(UiLanguage.Translate("内置播放组件不完整，请重新安装最新版凝然加密。"));
+        }
+        LibVLCSharp.Shared.Core.Initialize(nativeDirectory);
         _nativeVlc = new LibVLC("--no-video-title-show", "--file-caching=3500", "--network-caching=3500", "--quiet");
         _nativePlayer = new NativeMediaPlayer(_nativeVlc);
         _nativePlayer.EndReached += NativePlayer_EndReached;
@@ -321,7 +345,7 @@ public partial class SecureMediaViewerWindow : Window
     private void NativePlayer_Buffering(object? sender, MediaPlayerBufferingEventArgs e)
     {
         if (_closing || !_nativeHasPlayedFrame) return;
-        _ = Dispatcher.BeginInvoke(() => SetNativeLoading(e.Cache < 99.5f, "正在缓冲视频…"));
+        _ = Dispatcher.BeginInvoke(() => SetNativeLoading(e.Cache < 99.5f, UiLanguage.Translate("正在缓冲视频…")));
     }
 
     private void NativePlayer_TimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
@@ -356,8 +380,9 @@ public partial class SecureMediaViewerWindow : Window
         DisposeMediaCache();
         HideContentViews();
         EmptyView.Visibility = Visibility.Visible;
-        EmptyText.Text = "播放器已停止，您已回到文件列表。";
-        CrashReportDialog.ShowTemporary(this, "播放器出现错误", reason, "内嵌安全播放器");
+        EmptyText.Text = UiLanguage.Translate("播放器已停止，您已回到文件列表。");
+        CrashReportDialog.ShowTemporary(this, UiLanguage.Translate("播放器出现错误"),
+            UiLanguage.Translate(reason), UiLanguage.Translate("内嵌安全播放器"));
     }
 
     private async Task ConfigureNativePreviewAsync(MediaReadAheadCache cache, SecureArchiveEntry entry, int loadVersion)
@@ -496,7 +521,8 @@ public partial class SecureMediaViewerWindow : Window
         NativeLoopButton.Foreground = new SolidColorBrush(rule is "one" or "all"
             ? Color.FromRgb(100, 224, 189)
             : Color.FromRgb(216, 238, 228));
-        NativeLoopButton.ToolTip = $"播放结束后：{item?.Content ?? "停止"}";
+        var ruleLabel = item?.Content is string content ? UiLanguage.Translate(content) : UiLanguage.Translate("停止");
+        NativeLoopButton.ToolTip = $"{UiLanguage.Translate("播放结束后：")}{ruleLabel}";
         RevealNativeControls();
     }
 
@@ -742,7 +768,7 @@ public partial class SecureMediaViewerWindow : Window
     private void RequestNativePreview(long time)
     {
         _nativePreviewRequestedTime = time;
-        SetNativePreviewLoading(true, "正在生成预览…");
+        SetNativePreviewLoading(true, UiLanguage.Translate("正在生成预览…"));
         _nativePreviewTimer?.Stop();
         _nativePreviewTimer?.Start();
     }
@@ -773,14 +799,14 @@ public partial class SecureMediaViewerWindow : Window
     {
         _nativePreviewFramePending = false;
         _nativePreviewTimeoutTimer?.Stop();
-        SetNativePreviewLoading(true, "预览暂不可用");
+        SetNativePreviewLoading(true, UiLanguage.Translate("预览暂不可用"));
     }
 
     private void SetNativePreviewLoading(bool visible, string? caption = null)
     {
         if (caption is not null) NativePreviewLoadingText.Text = caption;
         NativePreviewLoadingPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        NativePreviewLoadingSpinner.BeginAnimation(RotateTransform.AngleProperty, visible && caption != "预览暂不可用"
+        NativePreviewLoadingSpinner.BeginAnimation(RotateTransform.AngleProperty, visible && caption != UiLanguage.Translate("预览暂不可用")
             ? new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(720)) { RepeatBehavior = RepeatBehavior.Forever }
             : null);
     }
@@ -1000,19 +1026,19 @@ public partial class SecureMediaViewerWindow : Window
         string? range;
         try { range = headers.GetHeader("Range"); } catch { range = null; }
         if (string.IsNullOrWhiteSpace(range)) return (0, totalLength, false);
-        if (!range.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("不支持的媒体读取范围。");
+        if (!range.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(UiLanguage.Translate("不支持的媒体读取范围。"));
         var parts = range[6..].Split(',', 2)[0].Trim().Split('-', 2);
-        if (parts.Length != 2) throw new InvalidDataException("媒体读取范围不正确。");
+        if (parts.Length != 2) throw new InvalidDataException(UiLanguage.Translate("媒体读取范围不正确。"));
         if (string.IsNullOrWhiteSpace(parts[0]))
         {
-            if (!long.TryParse(parts[1], out var suffix) || suffix <= 0) throw new InvalidDataException("媒体读取范围不正确。");
+            if (!long.TryParse(parts[1], out var suffix) || suffix <= 0) throw new InvalidDataException(UiLanguage.Translate("媒体读取范围不正确。"));
             var start = Math.Max(0, totalLength - suffix);
             return (start, totalLength - start, true);
         }
-        if (!long.TryParse(parts[0], out var startValue) || startValue < 0 || startValue >= totalLength) throw new InvalidDataException("媒体读取位置超出范围。");
+        if (!long.TryParse(parts[0], out var startValue) || startValue < 0 || startValue >= totalLength) throw new InvalidDataException(UiLanguage.Translate("媒体读取位置超出范围。"));
         var end = string.IsNullOrWhiteSpace(parts[1]) ? totalLength - 1 :
-            long.TryParse(parts[1], out var requestedEnd) ? Math.Min(requestedEnd, totalLength - 1) : throw new InvalidDataException("媒体读取范围不正确。");
-        if (end < startValue) throw new InvalidDataException("媒体读取范围不正确。");
+            long.TryParse(parts[1], out var requestedEnd) ? Math.Min(requestedEnd, totalLength - 1) : throw new InvalidDataException(UiLanguage.Translate("媒体读取范围不正确。"));
+        if (end < startValue) throw new InvalidDataException(UiLanguage.Translate("媒体读取范围不正确。"));
         return (startValue, end - startValue + 1, true);
     }
 
@@ -1034,14 +1060,20 @@ window.captureSecurePreview=capture;video.addEventListener('loadedmetadata',()=>
     private string BuildPlayerHtml(SecureArchiveEntry entry, string playerId)
     {
         var element = entry.MediaKind == SecureMediaKind.Audio ? "audio" : "video";
-        var name = SecurityElement.Escape(entry.Name) ?? "媒体";
+        var name = SecurityElement.Escape(entry.Name) ?? UiLanguage.Translate("媒体");
+        var hint = UiLanguage.IsEnglish ? "← / → Seek    Double-click for full screen" : "← / → 调整播放进度　双击画面全屏";
+        var playTitle = UiLanguage.Translate("播放或暂停");
+        var progressLabel = UiLanguage.Translate("播放进度");
+        var volumeLabel = UiLanguage.Translate("音量");
+        var fullscreenTitle = UiLanguage.Translate("全屏");
+        var decodeError = UiLanguage.Translate("媒体无法解码或读取。");
         var source = $"{MediaUrlPrefix}?v={Guid.NewGuid():N}";
         var template = """
 <!doctype html><html><head><meta charset="utf-8"><style>
 :root{color-scheme:dark}html,body,#stage{height:100%;width:100%;margin:0;overflow:hidden;background:#090b0a;font-family:"Segoe UI",sans-serif}#stage{position:relative;display:flex;align-items:center;justify-content:center}video,audio{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;background:#090b0a;outline:none}audio{height:92px;max-width:760px}#bar{position:absolute;left:18px;right:18px;bottom:16px;z-index:4;display:flex;align-items:center;gap:12px;padding:10px 13px;border-radius:12px;background:rgba(8,12,10,.68);backdrop-filter:blur(9px);transition:opacity .24s ease,transform .24s ease}#stage.hide-bar #bar{opacity:0;transform:translateY(10px);pointer-events:none}button{border:0;color:#fff;background:transparent;font-size:18px;min-width:30px;cursor:pointer}input[type=range]{accent-color:#41b883}#progress{flex:1;cursor:pointer}#time{min-width:96px;color:#eef7f1;font-size:13px;white-space:nowrap;font-variant-numeric:tabular-nums}#preview{position:absolute;display:none;z-index:5;bottom:59px;width:220px;padding:5px;border-radius:8px;background:rgba(8,12,10,.9);box-shadow:0 8px 20px #0008;pointer-events:none}#preview img{display:block;width:220px;height:124px;object-fit:contain;background:#000;border-radius:5px}#preview label{display:block;text-align:center;color:#fff;font-size:12px;margin-top:3px}#hint{position:absolute;top:15px;left:18px;color:#b6c9bf;font-size:13px;opacity:.76;transition:opacity .3s}#stage.playing #hint{opacity:0}
-</style></head><body><div id="stage"><{{element}} id="media" preload="auto" playsinline crossorigin="anonymous" aria-label="{{name}}"><source src="{{source}}" type="{{mime}}"></{{element}}><div id="hint">← / → 调整播放进度　双击画面全屏</div><div id="preview"><img><label></label></div><div id="bar"><button id="play" title="播放或暂停">▶</button><span id="time">0:00 / 0:00</span><input id="progress" type="range" min="0" max="1000" value="0" aria-label="播放进度"><input id="volume" type="range" min="0" max="1" step=".05" value="1" aria-label="音量"><button id="fullscreen" title="全屏">⛶</button></div></div><script>
+</style></head><body><div id="stage"><{{element}} id="media" preload="auto" playsinline crossorigin="anonymous" aria-label="{{name}}"><source src="{{source}}" type="{{mime}}"></{{element}}><div id="hint">{{hint}}</div><div id="preview"><img><label></label></div><div id="bar"><button id="play" title="{{playTitle}}">▶</button><span id="time">0:00 / 0:00</span><input id="progress" type="range" min="0" max="1000" value="0" aria-label="{{progressLabel}}"><input id="volume" type="range" min="0" max="1" step=".05" value="1" aria-label="{{volumeLabel}}"><button id="fullscreen" title="{{fullscreenTitle}}">⛶</button></div></div><script>
 const m=document.getElementById('media'),stage=document.getElementById('stage'),play=document.getElementById('play'),progress=document.getElementById('progress'),time=document.getElementById('time'),preview=document.getElementById('preview'),previewImg=preview.querySelector('img'),previewLabel=preview.querySelector('label'),volume=document.getElementById('volume');let hideTimer=0,wantedPreview=-1,previewBusy=false,previewTimer=0,previewStarted=false;const previewVideo=document.createElement('video');previewVideo.muted=true;previewVideo.preload='none';previewVideo.crossOrigin='anonymous';const post=x=>chrome.webview.postMessage(JSON.stringify({...x,playerId:'{{playerId}}'}));const fmt=s=>{s=Number.isFinite(s)?Math.max(0,Math.floor(s)):0;return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};function paint(){progress.value=m.duration?Math.round(m.currentTime/m.duration*1000):0;time.textContent=fmt(m.currentTime)+' / '+fmt(m.duration)}function reveal(){stage.classList.remove('hide-bar');clearTimeout(hideTimer);if(document.fullscreenElement)hideTimer=setTimeout(()=>stage.classList.add('hide-bar'),3000)}
-play.onclick=()=>m.paused?m.play():m.pause();m.onplay=()=>{play.textContent='❚❚';stage.classList.add('playing')};m.onpause=()=>play.textContent='▶';m.ontimeupdate=paint;m.onloadedmetadata=paint;m.onended=()=>{play.textContent='▶';post({kind:'ended'});reveal()};m.onerror=()=>post({kind:'problem',message:'媒体无法解码或读取。'});progress.oninput=()=>{if(m.duration)m.currentTime=m.duration*(progress.value/1000)};volume.oninput=()=>m.volume=volume.value;document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){m.currentTime=Math.max(0,Math.min(m.duration||0,m.currentTime+(e.key==='ArrowLeft'?-5:5)));e.preventDefault();reveal()}});const toggle=()=>document.fullscreenElement?document.exitFullscreen():stage.requestFullscreen();stage.ondblclick=toggle;document.getElementById('fullscreen').onclick=toggle;document.addEventListener('fullscreenchange',()=>{post({kind:'fullscreen',value:!!document.fullscreenElement});reveal()});stage.addEventListener('mousemove',reveal);reveal();
+play.onclick=()=>m.paused?m.play():m.pause();m.onplay=()=>{play.textContent='❚❚';stage.classList.add('playing')};m.onpause=()=>play.textContent='▶';m.ontimeupdate=paint;m.onloadedmetadata=paint;m.onended=()=>{play.textContent='▶';post({kind:'ended'});reveal()};m.onerror=()=>post({kind:'problem',message:'{{decodeError}}'});progress.oninput=()=>{if(m.duration)m.currentTime=m.duration*(progress.value/1000)};volume.oninput=()=>m.volume=volume.value;document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){m.currentTime=Math.max(0,Math.min(m.duration||0,m.currentTime+(e.key==='ArrowLeft'?-5:5)));e.preventDefault();reveal()}});const toggle=()=>document.fullscreenElement?document.exitFullscreen():stage.requestFullscreen();stage.ondblclick=toggle;document.getElementById('fullscreen').onclick=toggle;document.addEventListener('fullscreenchange',()=>{post({kind:'fullscreen',value:!!document.fullscreenElement});reveal()});stage.addEventListener('mousemove',reveal);reveal();
 async function drawPreview(){if(previewBusy||wantedPreview<0)return;previewBusy=true;let at=wantedPreview;wantedPreview=-1;try{if(!previewStarted){previewStarted=true;previewVideo.src='{{previewSource}}';previewVideo.load();await new Promise((ok,no)=>{let t=setTimeout(no,1800);previewVideo.onloadedmetadata=()=>{clearTimeout(t);ok()};previewVideo.onerror=()=>{clearTimeout(t);no()}})}if(Math.abs(previewVideo.currentTime-at)>.15){previewVideo.currentTime=at;await new Promise((ok,no)=>{let t=setTimeout(no,1800);previewVideo.onseeked=()=>{clearTimeout(t);ok()};previewVideo.onerror=()=>{clearTimeout(t);no()}})}let c=document.createElement('canvas'),w=220,h=124;c.width=w;c.height=h;let x=c.getContext('2d');x.fillStyle='#000';x.fillRect(0,0,w,h);let r=Math.min(w/(previewVideo.videoWidth||w),h/(previewVideo.videoHeight||h)),dw=(previewVideo.videoWidth||w)*r,dh=(previewVideo.videoHeight||h)*r;x.drawImage(previewVideo,(w-dw)/2,(h-dh)/2,dw,dh);previewImg.src=c.toDataURL('image/jpeg',.72);previewLabel.textContent=fmt(at)}catch{}finally{previewBusy=false;if(wantedPreview>=0)drawPreview()}}
 progress.addEventListener('pointermove',e=>{if(!m.duration)return;let r=progress.getBoundingClientRect(),f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),at=m.duration*f;preview.style.display='block';preview.style.left=Math.max(10,Math.min(window.innerWidth-240,e.clientX-110))+'px';clearTimeout(previewTimer);previewTimer=setTimeout(()=>{wantedPreview=at;drawPreview()},180)});progress.addEventListener('pointerleave',()=>preview.style.display='none');
 </script></div></body></html>
@@ -1051,6 +1083,12 @@ progress.addEventListener('pointermove',e=>{if(!m.duration)return;let r=progress
             .Replace("{{source}}", source, StringComparison.Ordinal)
             .Replace("{{previewSource}}", $"{source}&preview=1", StringComparison.Ordinal)
             .Replace("{{playerId}}", playerId, StringComparison.Ordinal)
+            .Replace("{{hint}}", hint, StringComparison.Ordinal)
+            .Replace("{{playTitle}}", playTitle, StringComparison.Ordinal)
+            .Replace("{{progressLabel}}", progressLabel, StringComparison.Ordinal)
+            .Replace("{{volumeLabel}}", volumeLabel, StringComparison.Ordinal)
+            .Replace("{{fullscreenTitle}}", fullscreenTitle, StringComparison.Ordinal)
+            .Replace("{{decodeError}}", decodeError, StringComparison.Ordinal)
             .Replace("{{mime}}", NrMediaFiles.GetContentType(entry.Name), StringComparison.Ordinal);
     }
 #endif
