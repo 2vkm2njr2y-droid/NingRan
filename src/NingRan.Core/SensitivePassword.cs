@@ -83,6 +83,8 @@ public sealed class SensitivePassword : IDisposable
         return bytes;
     }
 
+    internal SensitivePassword Clone() => new(GetBytes().ToArray());
+
     internal char[] CopyCharacters()
     {
         var bytes = GetBytes();

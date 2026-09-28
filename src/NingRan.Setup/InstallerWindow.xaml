@@ -132,8 +132,8 @@
                                 <CheckBox x:Name="DesktopShortcutCheck" IsChecked="True" Content="创建桌面快捷方式" Margin="0,0,0,14" />
                                 <CheckBox x:Name="StartMenuShortcutCheck" IsChecked="True" Content="创建开始菜单快捷方式" Margin="0,0,0,14" />
                                 <CheckBox x:Name="FileAssociationsCheck" IsChecked="True"
-                                           Content="关联加密文件和身份信息（.nrenc、.nrid、.nrpub）" />
-                                <TextBlock x:Name="FileAssociationDescription" Text="不关联普通密匙文件和 .nrkey；仍可在程序内手动选择。"
+                                           Content="关联旧版加密文件和身份信息（.nrenc、.nrid、.nrpub）" />
+                                <TextBlock x:Name="FileAssociationDescription" Text="新版 .jpg 加密照片不改变系统看图关联，请在凝然内选择打开。"
                                            TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="25,8,0,0" />
                             </StackPanel>
                         </Border>
@@ -164,7 +164,7 @@
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
                         <TextBlock x:Name="UninstallTitle" Text="卸载凝然" FontSize="28" FontWeight="SemiBold" />
-                        <TextBlock x:Name="UninstallDescription" Grid.Row="1" Text="默认只删除程序，个人数据和设置都会保留。"
+                                <TextBlock x:Name="UninstallDescription" Grid.Row="1" Text="默认只删除程序，个人数据和设置都会保留。"
                                    TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="14" Margin="0,8,0,22" />
                         <Border Grid.Row="2" Background="White" BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="1" CornerRadius="14" Padding="20,16">
@@ -181,6 +181,8 @@
                                           Content="同时删除本机保存的全部身份、联系人、设备登记和设置"
                                           FontWeight="SemiBold" />
                                 <TextBlock x:Name="UserDataInventoryText" Text="正在统计个人数据…"
+                                           TextWrapping="Wrap" Foreground="#7A6540" Margin="25,9,0,0" />
+                                <TextBlock Text="您保存在其他位置的凝然保险箱（.nrvault）始终不会被卸载程序删除，请自行保管。"
                                            TextWrapping="Wrap" Foreground="#7A6540" Margin="25,9,0,0" />
                             </StackPanel>
                         </Border>

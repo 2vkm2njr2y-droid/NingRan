@@ -67,7 +67,8 @@ public sealed record LocalMediaLaunchOptions(IReadOnlyList<string> Files)
 
 public sealed record PlayerOptions(string Pipe, string SelectedPath, IReadOnlyList<MediaPipeCatalogEntry> Entries);
 public sealed record MediaPipeCatalogEntry(string Id, string Name, long Length, string Mime, string Kind);
-internal sealed record MediaPipeRequest(string Kind, long Start = 0, long Length = 0, string? Message = null, string? Path = null);
+internal sealed record MediaPipeRequest(string Kind, long Start = 0, long Length = 0, string? Message = null, string? Path = null,
+    bool Recursive = false);
 internal sealed record MediaPipeResponse(bool Success, string? Error = null, long Start = 0, long Length = 0,
     long TotalLength = 0, string? ContentType = null, IReadOnlyList<MediaPipeCatalogEntry>? Entries = null);
 

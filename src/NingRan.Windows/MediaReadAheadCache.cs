@@ -47,10 +47,34 @@ internal sealed class MediaReadAheadCache : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_length <= 0) throw new InvalidDataException("媒体文件为空，无法播放。");
-        var finalBlock = (_length - 1) / BlockSize;
-        var required = new HashSet<long> { 0, Math.Min(1, finalBlock), finalBlock, Math.Max(0, finalBlock - 1) };
-        await Task.WhenAll(required.Select(block => GetBlockAsync(block).WaitAsync(cancellationToken))).ConfigureAwait(false);
+
+        // 启动时只等待文件开头。以前这里还会同步读取文件结尾的两个大分段，
+        // MP4 等需要从结尾寻找媒体信息的文件会因此在真正播放前长时间等待。
+        // 播放核心需要结尾信息时，MediaReadAheadStream 会按定位位置即时读取；
+        // 结尾预热也放到后台，不再挡住首帧播放。
+        await GetBlockAsync(0).WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (_length > BlockSize)
+        {
+            _ = WarmTailAsync();
+        }
         WarmFrom(0);
+    }
+
+    private async Task WarmTailAsync()
+    {
+        try
+        {
+            var finalBlock = (_length - 1) / BlockSize;
+            var tailBlocks = new HashSet<long> { finalBlock, Math.Max(0, finalBlock - 1) };
+            await Task.WhenAll(tailBlocks.Select(block => GetBlockAsync(block).WaitAsync(_shutdown.Token)))
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch (ObjectDisposedException) when (_disposed) { }
+        catch
+        {
+            // 结尾预热只用于加快定位，不能阻止视频从文件开头开始播放。
+        }
     }
 
     public void WarmFrom(long position)

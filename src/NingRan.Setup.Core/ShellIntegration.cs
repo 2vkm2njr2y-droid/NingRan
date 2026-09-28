@@ -7,28 +7,46 @@ public static class ShellIntegration
 {
     private const string ClassesPath = @"Software\Classes";
 #if NINGRAN_MEDIA_PLAYER
+    private const string MediaPlayerProgramId = "Ningran.MediaPlayer";
     private static readonly AssociationDefinition[] Associations =
     [
-        new(".mp3", "NingRan.MediaPlayer.Mp3", "凝然媒体播放器 MP3 音频", @"Assets\AppIcon.ico"),
-        new(".wav", "NingRan.MediaPlayer.Wav", "凝然媒体播放器 WAV 音频", @"Assets\AppIcon.ico"),
-        new(".m4a", "NingRan.MediaPlayer.M4a", "凝然媒体播放器 M4A 音频", @"Assets\AppIcon.ico"),
-        new(".aac", "NingRan.MediaPlayer.Aac", "凝然媒体播放器 AAC 音频", @"Assets\AppIcon.ico"),
-        new(".flac", "NingRan.MediaPlayer.Flac", "凝然媒体播放器 FLAC 音频", @"Assets\AppIcon.ico"),
-        new(".ogg", "NingRan.MediaPlayer.Ogg", "凝然媒体播放器 OGG 音频", @"Assets\AppIcon.ico"),
-        new(".wma", "NingRan.MediaPlayer.Wma", "凝然媒体播放器 WMA 音频", @"Assets\AppIcon.ico"),
-        new(".mp4", "NingRan.MediaPlayer.Mp4", "凝然媒体播放器 MP4 视频", @"Assets\AppIcon.ico"),
-        new(".m4v", "NingRan.MediaPlayer.M4v", "凝然媒体播放器 M4V 视频", @"Assets\AppIcon.ico"),
-        new(".mov", "NingRan.MediaPlayer.Mov", "凝然媒体播放器 MOV 视频", @"Assets\AppIcon.ico"),
-        new(".avi", "NingRan.MediaPlayer.Avi", "凝然媒体播放器 AVI 视频", @"Assets\AppIcon.ico"),
-        new(".wmv", "NingRan.MediaPlayer.Wmv", "凝然媒体播放器 WMV 视频", @"Assets\AppIcon.ico"),
-        new(".webm", "NingRan.MediaPlayer.Webm", "凝然媒体播放器 WEBM 视频", @"Assets\AppIcon.ico"),
-        new(".mkv", "NingRan.MediaPlayer.Mkv", "凝然媒体播放器 MKV 视频", @"Assets\AppIcon.ico"),
-        new(".mpeg", "NingRan.MediaPlayer.Mpeg", "凝然媒体播放器 MPEG 视频", @"Assets\AppIcon.ico"),
-        new(".mpg", "NingRan.MediaPlayer.Mpg", "凝然媒体播放器 MPG 视频", @"Assets\AppIcon.ico"),
-        new(".3gp", "NingRan.MediaPlayer.ThreeGp", "凝然媒体播放器 3GP 视频", @"Assets\AppIcon.ico"),
-        new(".ts", "NingRan.MediaPlayer.Ts", "凝然媒体播放器 TS 视频", @"Assets\AppIcon.ico"),
-        new(".mpv", "NingRan.MediaPlayer.Mpv", "凝然媒体播放器 MPV 视频", @"Assets\AppIcon.ico"),
+        new(".mp3", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".wav", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".m4a", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".aac", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".flac", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".ogg", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".wma", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mp4", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".m4v", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mov", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".avi", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".wmv", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".webm", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mkv", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mpeg", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mpg", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".3gp", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".ts", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
+        new(".mpv", MediaPlayerProgramId, "凝然媒体播放器", @"Assets\AppIcon.ico"),
     ];
+    private static readonly string[] LegacyMediaPlayerProgramIds =
+    [
+        "NingRan.MediaPlayer.Mp3", "NingRan.MediaPlayer.Wav", "NingRan.MediaPlayer.M4a",
+        "NingRan.MediaPlayer.Aac", "NingRan.MediaPlayer.Flac", "NingRan.MediaPlayer.Ogg",
+        "NingRan.MediaPlayer.Wma", "NingRan.MediaPlayer.Mp4", "NingRan.MediaPlayer.M4v",
+        "NingRan.MediaPlayer.Mov", "NingRan.MediaPlayer.Avi", "NingRan.MediaPlayer.Wmv",
+        "NingRan.MediaPlayer.Webm", "NingRan.MediaPlayer.Mkv", "NingRan.MediaPlayer.Mpeg",
+        "NingRan.MediaPlayer.Mpg", "NingRan.MediaPlayer.ThreeGp", "NingRan.MediaPlayer.Ts",
+        "NingRan.MediaPlayer.Mpv",
+        "NingRan.MediaViewer.video", "NingRan.MediaViewer.image", "NingRan.MediaViewer.audio",
+        "NingRan.MediaViewer.pdf",
+        "Ningran Media Image", "Ningran Media Video", "Ningran Media Audio",
+        "Ningran.MediaViewer.video", "Ningran.MediaViewer.image", "Ningran.MediaViewer.audio",
+        "Ningran.MediaViewer.pdf", "com.ningran.mediaviewer",
+    ];
+    private static readonly string[] LegacyMediaApplicationNames =
+        ["凝然媒体查看器.exe", "NingRan.MediaPlayer.exe", "凝然媒体播放器.exe"];
 #else
     private static readonly AssociationDefinition[] Associations =
     [
@@ -100,6 +118,9 @@ public static class ShellIntegration
 
         if (state.FileAssociations)
         {
+#if NINGRAN_MEDIA_PLAYER
+            CleanupLegacyMediaPlayerRegistrations();
+#endif
             foreach (var association in Associations)
             {
                 var description = GetAssociationDescription(association, state);
@@ -130,6 +151,8 @@ public static class ShellIntegration
                     $@"{ClassesPath}\{association.Extension}",
                     writable: true);
                 extensionKey.SetValue(null, association.ProgramId, RegistryValueKind.String);
+                using var openWith = extensionKey.CreateSubKey("OpenWithProgids", writable: true);
+                openWith.SetValue(association.ProgramId, Array.Empty<byte>(), RegistryValueKind.None);
             }
         }
 
@@ -165,7 +188,8 @@ public static class ShellIntegration
                 if (string.Equals(
                         extensionKey?.GetValue(null) as string,
                         association.ProgramId,
-                        StringComparison.Ordinal))
+                        StringComparison.OrdinalIgnoreCase) ||
+                    IsLegacyMediaPlayerProgramId(extensionKey?.GetValue(null) as string))
                 {
                     var previous = state.AssociationBackups.FirstOrDefault(backup =>
                         string.Equals(backup.Extension, association.Extension, StringComparison.OrdinalIgnoreCase));
@@ -184,6 +208,10 @@ public static class ShellIntegration
                 $@"{ClassesPath}\{association.ProgramId}",
                 throwOnMissingSubKey: false);
         }
+
+#if NINGRAN_MEDIA_PLAYER
+        CleanupLegacyMediaPlayerRegistrations();
+#endif
 
         if (removeUninstallEntry)
         {
@@ -345,6 +373,82 @@ public static class ShellIntegration
         SetupProduct.IsMediaPlayer || !string.Equals(state.Language, "en", StringComparison.OrdinalIgnoreCase)
             ? association.Description
             : association.DescriptionEnglish ?? association.Description;
+
+#if NINGRAN_MEDIA_PLAYER
+    private static bool IsLegacyMediaPlayerProgramId(string? value) =>
+        value is not null && LegacyMediaPlayerProgramIds.Contains(value, StringComparer.OrdinalIgnoreCase);
+
+    private static void CleanupLegacyMediaPlayerRegistrations()
+    {
+        using var classes = Registry.CurrentUser.OpenSubKey(ClassesPath, writable: true);
+        if (classes is null) return;
+
+        foreach (var legacyId in LegacyMediaPlayerProgramIds)
+            classes.DeleteSubKeyTree(legacyId, throwOnMissingSubKey: false);
+        foreach (var legacyName in LegacyMediaApplicationNames)
+            classes.DeleteSubKeyTree($@"Applications\{legacyName}", throwOnMissingSubKey: false);
+
+        foreach (var association in Associations)
+        {
+            using var extensionKey = classes.OpenSubKey(association.Extension, writable: true);
+            var current = extensionKey?.GetValue(null) as string;
+            if (string.Equals(current, MediaPlayerProgramId, StringComparison.OrdinalIgnoreCase) ||
+                IsLegacyMediaPlayerProgramId(current))
+            {
+                extensionKey?.DeleteValue(string.Empty, throwOnMissingValue: false);
+            }
+
+            using var openWith = extensionKey?.OpenSubKey("OpenWithProgids", writable: true);
+            if (openWith is null) continue;
+            openWith.DeleteValue(MediaPlayerProgramId, throwOnMissingValue: false);
+            foreach (var legacyId in LegacyMediaPlayerProgramIds)
+                openWith.DeleteValue(legacyId, throwOnMissingValue: false);
+        }
+
+        using var fileExtensions = Registry.CurrentUser.OpenSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts", writable: true);
+        if (fileExtensions is null) return;
+        foreach (var association in Associations)
+        {
+            using var fileExtensionKey = fileExtensions.OpenSubKey(
+                association.Extension,
+                writable: true);
+            using var fileOpenWithProgids = fileExtensionKey?.OpenSubKey(
+                "OpenWithProgids",
+                writable: true);
+            fileOpenWithProgids?.DeleteValue(MediaPlayerProgramId, throwOnMissingValue: false);
+            if (fileOpenWithProgids is not null)
+            {
+                foreach (var legacyId in LegacyMediaPlayerProgramIds)
+                    fileOpenWithProgids.DeleteValue(legacyId, throwOnMissingValue: false);
+            }
+
+            using var openWithList = fileExtensions.OpenSubKey(
+                $@"{association.Extension}\OpenWithList", writable: true);
+            if (openWithList is null) continue;
+            var removedValueNames = new List<string>();
+            foreach (var valueName in openWithList.GetValueNames())
+            {
+                if (string.Equals(valueName, "MRUList", StringComparison.OrdinalIgnoreCase)) continue;
+                var value = openWithList.GetValue(valueName) as string;
+                if (value is not null && LegacyMediaApplicationNames.Contains(value, StringComparer.OrdinalIgnoreCase))
+                {
+                    removedValueNames.Add(valueName);
+                    openWithList.DeleteValue(valueName, throwOnMissingValue: false);
+                }
+            }
+
+            var mru = openWithList.GetValue("MRUList") as string;
+            if (mru is null) continue;
+            foreach (var removed in removedValueNames)
+                mru = mru.Replace(removed, string.Empty, StringComparison.OrdinalIgnoreCase);
+            if (mru.Length == 0) openWithList.DeleteValue("MRUList", throwOnMissingValue: false);
+            else openWithList.SetValue("MRUList", mru, RegistryValueKind.String);
+        }
+    }
+#else
+    private static bool IsLegacyMediaPlayerProgramId(string? value) => false;
+#endif
 
     private static void NotifyShellChanged() => SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
 

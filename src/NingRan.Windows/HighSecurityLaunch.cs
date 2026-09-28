@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using NingRan.Core;
 
 namespace NingRan.Windows;
 
@@ -19,7 +20,7 @@ internal static class HighSecurityLaunch
         try
         {
             var fullPath = Path.GetFullPath(arguments[1]);
-            if (!File.Exists(fullPath) || !string.Equals(Path.GetExtension(fullPath), ".nrenc", StringComparison.OrdinalIgnoreCase))
+            if (!File.Exists(fullPath) || !NrArchiveService.IsSupportedArchiveFile(fullPath))
             {
                 return false;
             }

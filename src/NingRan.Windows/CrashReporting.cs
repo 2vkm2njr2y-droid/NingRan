@@ -121,7 +121,8 @@ internal sealed class CrashReportDialog : Window
         try
         {
             path = CrashReportService.Create(feature, summary, exception);
-            new CrashReportDialog(owner, title, summary, path).ShowDialog();
+            // Keep the report window modeless so the owner can still be minimized or moved behind it.
+            new CrashReportDialog(owner, title, summary, path).Show();
         }
         catch
         {

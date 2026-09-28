@@ -336,8 +336,11 @@ internal static class Program
     {
         try
         {
+            var extension = Path.GetExtension(path);
             return Path.IsPathFullyQualified(path) && File.Exists(path) &&
-                   string.Equals(Path.GetExtension(path), ".nrenc", StringComparison.OrdinalIgnoreCase);
+                   (string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {

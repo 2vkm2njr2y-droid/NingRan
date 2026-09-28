@@ -1,0 +1,267 @@
+<Window x:Class="NingRan.Windows.VaultWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="凝然保险箱" Width="920" Height="760" MinWidth="760" MinHeight="620"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource PageBrush}"
+        Closing="Window_Closing" StateChanged="VaultWindow_StateChanged">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,16">
+            <TextBlock x:Name="TitleText" Text="凝然保险箱" FontSize="24" FontWeight="Bold" />
+            <TextBlock x:Name="SubtitleText" Text="固定容量保险箱支持日常空间与可选隐蔽空间；两套密码从同一入口打开各自内容。"
+                       Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="14" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
+                <StackPanel>
+                    <TextBlock Text="导航" FontSize="16" FontWeight="SemiBold" Margin="4,2,4,12" />
+                    <Button x:Name="LocationNavButton" Content="保险箱位置" Click="NavigateLocation_Click" Margin="0,0,0,8" />
+                    <Button x:Name="ProtectionNavButton" Content="保护方式" Click="NavigateProtection_Click" Margin="0,0,0,8" />
+                    <Button x:Name="ActionsNavButton" Content="保险箱操作" Click="NavigateActions_Click" />
+                    <Separator Margin="4,16,4,12" />
+                    <TextBlock Text="当前状态" FontSize="13" FontWeight="SemiBold" Margin="4,0,4,6" />
+                    <TextBlock x:Name="SidebarStatusText" Text="尚未解锁" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="4,0,4,5" />
+                    <TextBlock x:Name="SidebarDriveText" Text="" Foreground="{StaticResource PrimaryBrush}" TextWrapping="Wrap" Margin="4,0,4,5" />
+                    <TextBlock x:Name="SidebarSpaceText" Text="" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="4,0,4,0" />
+                </StackPanel>
+            </Border>
+            <ScrollViewer x:Name="MainScrollViewer" Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel>
+                <Border x:Name="LocationPage" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="12" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock x:Name="LocationTitle" Text="保险箱位置" FontSize="16" FontWeight="SemiBold" />
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBox x:Name="VaultLocationInput" IsReadOnly="True" ToolTip="选择保存保险箱的文件夹" />
+                            <Button x:Name="ChooseLocationButton" Grid.Column="1" Content="选择位置" Click="ChooseLocation_Click" Margin="8,0,0,0" />
+                        </Grid>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <TextBlock x:Name="VaultNameLabel" Text="保险箱名称" VerticalAlignment="Center" />
+                            <TextBox x:Name="VaultNameInput" Grid.Column="1" Text="我的保险箱" />
+                        </Grid>
+                        <TextBlock x:Name="SelectedSourcesText" Text="尚未选择加入保险箱的资料。" Foreground="{StaticResource MutedBrush}" Margin="0,13,0,5" />
+                        <ListBox x:Name="SourceList" MinHeight="80" MaxHeight="150" DisplayMemberPath="." />
+                        <WrapPanel Margin="0,9,0,0">
+                            <Button x:Name="AddFilesButton" Content="添加文件" Click="AddFiles_Click" Margin="0,0,8,0" />
+                            <Button x:Name="AddFolderButton" Content="添加文件夹" Click="AddFolder_Click" Margin="0,0,8,0" />
+                            <Button x:Name="ClearSourcesButton" Content="清空选择" Click="ClearSources_Click" />
+                        </WrapPanel>
+                        <Border x:Name="HiddenSourcesPanel" Visibility="Collapsed" Background="#F5F8F7"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                Padding="12" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="HiddenSourcesTitle" Text="隐蔽空间初始资料（可选）" FontWeight="SemiBold" />
+                                <TextBlock x:Name="HiddenSourcesHint" Text="这些资料只会出现在秘密密码打开的空间中。"
+                                           Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,7" />
+                                <ListBox x:Name="HiddenSourceList" MinHeight="60" MaxHeight="130" DisplayMemberPath="." />
+                                <WrapPanel Margin="0,8,0,0">
+                                    <Button x:Name="AddHiddenFilesButton" Content="添加文件" Click="AddHiddenFiles_Click" Margin="0,0,8,0" />
+                                    <Button x:Name="AddHiddenFolderButton" Content="添加文件夹" Click="AddHiddenFolder_Click" Margin="0,0,8,0" />
+                                    <Button x:Name="ClearHiddenSourcesButton" Content="清空选择" Click="ClearHiddenSources_Click" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="ProtectionPage" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="12" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock x:Name="ProtectionTitle" Text="保护方式" FontSize="16" FontWeight="SemiBold" />
+                        <ComboBox x:Name="ModeCombo" SelectedIndex="0" Margin="0,9,0,0" SelectionChanged="ModeCombo_SelectionChanged">
+                            <ComboBoxItem Content="密码" />
+                            <ComboBoxItem Content="密码＋密匙文件" />
+                            <ComboBoxItem Content="密码＋物理设备" />
+                        </ComboBox>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <StackPanel><TextBlock x:Name="PasswordLabel" Text="密码" Margin="0,0,0,5" /><PasswordBox x:Name="PasswordInput" /></StackPanel>
+                            <StackPanel Grid.Column="2"><TextBlock x:Name="ConfirmPasswordLabel" Text="确认密码" Margin="0,0,0,5" /><PasswordBox x:Name="ConfirmPasswordInput" /></StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="KeyPanel" Visibility="Collapsed" Margin="0,11,0,0">
+                            <TextBlock x:Name="KeyFileLabel" Text="密匙文件" Margin="0,0,0,5" />
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="KeyFileInput" IsReadOnly="True" />
+                                <Button x:Name="ChooseKeyButton" Grid.Column="1" Content="选择" Click="ChooseKey_Click" Margin="8,0,0,0" />
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel x:Name="PhysicalPanel" Visibility="Collapsed" Margin="0,11,0,0">
+                            <TextBlock x:Name="PhysicalLabel" Text="授权物理设备（可多选）" Margin="0,0,0,5" />
+                            <ListBox x:Name="PhysicalList" DisplayMemberPath="DisplayText" SelectionMode="Multiple" MinHeight="60" MaxHeight="120" />
+                            <TextBlock x:Name="PhysicalHint" Text="创建时需要逐一出示所选设备；设备丢失后无法恢复。" Foreground="Firebrick" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        </StackPanel>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SizeProtectionLabel" Text="大小保护" VerticalAlignment="Center" />
+                            <ComboBox x:Name="SizeProtectionCombo" Grid.Column="1" SelectedIndex="1">
+                                <ComboBoxItem Content="节省空间" />
+                                <ComboBoxItem Content="隐藏精确大小（推荐）" />
+                            </ComboBox>
+                        </Grid>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /><ColumnDefinition Width="95" /></Grid.ColumnDefinitions>
+                            <TextBlock x:Name="CapacityLabel" Text="固定总容量" VerticalAlignment="Center" />
+                            <ComboBox x:Name="CapacityCombo" Grid.Column="1" SelectedIndex="0" SelectionChanged="CapacityCombo_SelectionChanged">
+                                <ComboBoxItem Content="1 GB" Tag="1" />
+                                <ComboBoxItem Content="5 GB" Tag="5" />
+                                <ComboBoxItem Content="20 GB" Tag="20" />
+                                <ComboBoxItem Content="50 GB" Tag="50" />
+                                <ComboBoxItem Content="自定义" Tag="custom" />
+                            </ComboBox>
+                            <TextBox x:Name="CustomCapacityInput" Grid.Column="2" Margin="8,0,0,0" Text="1" Visibility="Collapsed"
+                                     ToolTip="以 GB 为单位" TextChanged="CustomCapacityInput_TextChanged" />
+                        </Grid>
+                        <TextBlock x:Name="CapacityHintText" Text="创建后总容量不能调整；未使用区域会填充随机数据。" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="150,5,0,0" />
+                        <Separator Margin="0,15,0,12" />
+                        <CheckBox x:Name="CreateHiddenSpaceCheckBox" Content="建立隐蔽空间" FontWeight="SemiBold"
+                                  Checked="CreateHiddenSpace_Changed" Unchecked="CreateHiddenSpace_Changed" />
+                        <TextBlock x:Name="HiddenSpaceOptionHint"
+                                   Text="同一个保险箱可用不同密码打开两个互相独立的空间。此功能可以减少界面直接暴露，但不能保证在所有取证条件下绝对无法判断隐蔽空间是否存在。"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="22,5,0,0" />
+                        <Border x:Name="HiddenSpacePanel" Visibility="Collapsed" Background="#F5F8F7"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                Padding="12" Margin="0,11,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="HiddenSpaceTitle" Text="秘密密码与空间容量" FontWeight="SemiBold" />
+                                <Grid Margin="0,9,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <StackPanel><TextBlock x:Name="HiddenPasswordLabel" Text="秘密密码" Margin="0,0,0,5" /><PasswordBox x:Name="HiddenPasswordInput" /></StackPanel>
+                                    <StackPanel Grid.Column="2"><TextBlock x:Name="ConfirmHiddenPasswordLabel" Text="确认秘密密码" Margin="0,0,0,5" /><PasswordBox x:Name="ConfirmHiddenPasswordInput" /></StackPanel>
+                                </Grid>
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock x:Name="DailyCapacityLabel" Text="日常空间容量（GB）" Margin="0,0,0,5" />
+                                        <TextBox x:Name="DailyCapacityInput" Text="0.55" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock x:Name="HiddenCapacityLabel" Text="隐蔽空间容量（GB）" Margin="0,0,0,5" />
+                                        <TextBox x:Name="HiddenCapacityInput" Text="0.35" />
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock x:Name="HiddenSpaceWarning"
+                                           Text="秘密密码只支持单独密码保护。忘记任一密码都无法恢复对应内容；创建后不能调整两个空间的容量。"
+                                           Foreground="Firebrick" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="ActionsPage" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="12" Padding="18" Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock x:Name="ActionsTitle" Text="保险箱操作" FontSize="16" FontWeight="SemiBold" />
+                        <StackPanel x:Name="CreateSetupPanel" Margin="0,10,0,0">
+                            <TextBlock x:Name="CreateActionHint" Text="确认前两页的信息后创建；完成后会立即挂载为临时磁盘。"
+                                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                            <Button x:Name="CreateButton" Content="创建并打开保险箱" Style="{StaticResource PrimaryButton}"
+                                    Click="Create_Click" HorizontalAlignment="Left" />
+                        </StackPanel>
+                        <StackPanel x:Name="OpenSetupPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                            <TextBlock x:Name="OpenHintText" Text="选择保险箱并输入对应密码。成功后会挂载临时磁盘并自动打开资源管理器。"
+                                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,10" />
+                            <TextBlock x:Name="ExistingVaultLabel" Text="已有保险箱路径" Margin="0,0,0,5" />
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="ExistingVaultInput" IsReadOnly="True" />
+                                <WrapPanel Grid.Column="1">
+                                    <Button x:Name="ChooseExistingButton" Content="选择文件" Click="ChooseExisting_Click" Margin="8,0,0,0" />
+                                    <Button x:Name="ChooseLegacyButton" Content="旧版文件夹" Click="ChooseLegacy_Click" Margin="8,0,0,0" />
+                                </WrapPanel>
+                            </Grid>
+                            <TextBlock x:Name="OpenPasswordLabel" Text="保险箱密码" Margin="0,12,0,5" />
+                            <PasswordBox x:Name="OpenPasswordInput" />
+                            <StackPanel x:Name="OpenKeyPanel" Visibility="Collapsed" Margin="0,11,0,0">
+                                <TextBlock x:Name="OpenKeyFileLabel" Text="原密匙文件" Margin="0,0,0,5" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <TextBox x:Name="OpenKeyFileInput" IsReadOnly="True" />
+                                    <Button x:Name="ChooseOpenKeyButton" Grid.Column="1" Content="选择" Click="ChooseOpenKey_Click" Margin="8,0,0,0" />
+                                </Grid>
+                                <TextBlock x:Name="OpenKeyHintText"
+                                           Text="日常空间原来使用密匙文件时请选择；使用秘密密码打开另一空间时不用选择。"
+                                           Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0" />
+                            </StackPanel>
+                            <Border x:Name="OpenUpgradePanel" Visibility="Collapsed" Background="#F5F8F7"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                    Padding="12" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock x:Name="UpgradeCapacityLabel" Text="升级后的固定总容量" FontWeight="SemiBold" />
+                                    <Grid Margin="0,7,0,0">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /></Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="UpgradeCapacityCombo" SelectedIndex="0" SelectionChanged="UpgradeCapacityCombo_SelectionChanged">
+                                            <ComboBoxItem Content="1 GB" Tag="1" />
+                                            <ComboBoxItem Content="5 GB" Tag="5" />
+                                            <ComboBoxItem Content="20 GB" Tag="20" />
+                                            <ComboBoxItem Content="50 GB" Tag="50" />
+                                            <ComboBoxItem Content="自定义" Tag="custom" />
+                                        </ComboBox>
+                                        <TextBox x:Name="UpgradeCustomCapacityInput" Grid.Column="1" Margin="8,0,0,0" Text="1"
+                                                 Visibility="Collapsed" ToolTip="以 GB 为单位" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <WrapPanel Margin="0,13,0,0">
+                                <Button x:Name="OpenButton" Content="挂载并打开" Style="{StaticResource PrimaryButton}" Click="Open_Click" Margin="0,0,8,0" />
+                                <Button x:Name="UpgradeButton" Content="升级旧保险箱" Click="Upgrade_Click" Visibility="Collapsed" />
+                            </WrapPanel>
+                        </StackPanel>
+                        <TextBlock x:Name="StatusText" Text="尚未解锁保险箱。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,13,0,0" />
+                        <StackPanel x:Name="ProgressPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                            <Grid><TextBlock x:Name="ProgressStageText" Text="正在准备…" /><TextBlock x:Name="ProgressPercentText" Text="0%" HorizontalAlignment="Right" /></Grid>
+                            <ProgressBar x:Name="OperationProgress" Minimum="0" Maximum="100" Height="14" Margin="0,5,0,0" />
+                            <Button x:Name="CancelOperationButton" Content="取消当前操作" Click="CancelOperation_Click" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                        </StackPanel>
+                        <TextBlock x:Name="DriveText" Text="" TextWrapping="Wrap" Foreground="{StaticResource PrimaryBrush}" Margin="0,4,0,0" />
+                        <WrapPanel x:Name="UnlockedActionsPanel" Visibility="Collapsed" Margin="0,12,0,0">
+                            <Button x:Name="AppendButton" Content="追加资料" Click="Append_Click" Margin="0,0,8,0">
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem x:Name="AppendFilesMenuItem" Header="添加文件…" Click="AppendFiles_Click" />
+                                        <MenuItem x:Name="AppendFolderMenuItem" Header="添加文件夹…" Click="AppendFolder_Click" />
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                            <Button x:Name="ImportButton" Content="导入 .nrenc" Click="Import_Click" Margin="0,0,8,0" />
+                            <Button x:Name="ExportButton" Content="导出为 .nrenc" Click="Export_Click" Margin="0,0,8,0" />
+                            <Button x:Name="VerifyButton" Content="完整检查" Click="Verify_Click" Margin="0,0,8,0" />
+                            <Button x:Name="HistoryButton" Content="历史版本" Click="History_Click" Margin="0,0,8,0" />
+                            <Button x:Name="InternalBrowseButton" Content="内部浏览" Click="InternalBrowse_Click" Margin="0,0,8,0" Visibility="Collapsed" />
+                            <Button x:Name="LockButton" Content="锁定并卸载磁盘" Click="Lock_Click" Style="{StaticResource PrimaryButton}" />
+                        </WrapPanel>
+                        <Border x:Name="HistorySettingsPanel" Visibility="Collapsed" Background="#F5F8F7" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="HistorySettingsTitle" Text="当前保险箱的历史版本设置" FontWeight="SemiBold" />
+                                <TextBlock x:Name="HistorySettingsHint" Text="这些设置只作用于当前保险箱，不会影响其他保险箱。解锁后可以修改。"
+                                           Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,4,0,8" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HistoryDaysLabel" Text="保留天数" VerticalAlignment="Center" />
+                                    <TextBox x:Name="HistoryDaysInput" Grid.Column="1" Text="15" IsEnabled="False" />
+                                </Grid>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HistoryBytesLabel" Text="空间上限（字节，0 表示不限）" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    <TextBox x:Name="HistoryBytesInput" Grid.Column="1" Text="0" IsEnabled="False" />
+                                </Grid>
+                                <Button x:Name="SaveHistorySettingsButton" Content="保存当前保险箱设置" Click="SaveHistorySettings_Click"
+                                        HorizontalAlignment="Left" Margin="0,10,0,0" IsEnabled="False" />
+                            </StackPanel>
+                        </Border>
+                        <TextBlock x:Name="SafetyNoticeText" Text="安全提醒：第三方软件可能留下最近记录、自动恢复文件、缩略图或云同步副本。本预览版不能保证不产生这些副本，也不能替代备份。"
+                                   Foreground="Firebrick" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0" />
+                    </StackPanel>
+                </Border>
+              </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

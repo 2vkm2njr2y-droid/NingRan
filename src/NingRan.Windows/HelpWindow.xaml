@@ -19,14 +19,28 @@
 
                 <StackPanel x:Name="OverviewSection">
                     <TextBlock x:Name="OverviewTitle" Text="开始使用" FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock x:Name="OverviewText" Text="选择文件或文件夹后，可选择加密或解密。加密文件会以 .nrenc 保存；成功打开 .nrenc 后，可以在程序内浏览文件树，不需要先导出全部内容。"
+                    <TextBlock x:Name="OverviewText" Text="选择文件或文件夹及一张封面照片后，加密成品会以 .jpg 保存。普通看图软件只显示封面；在凝然内选择该照片后，可安全打开其中的加密内容。旧版 .nrenc 文件仍可继续打开。"
                                TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
                 </StackPanel>
                 <Separator Margin="0,0,0,22" />
 
                 <StackPanel x:Name="ArchiveSection">
                     <TextBlock x:Name="ArchiveTitle" Text="查看、导出与修改加密内容" FontSize="18" FontWeight="SemiBold" />
-                    <TextBlock x:Name="ArchiveText" Text="在安全查看的文件树中，右键文件或文件夹可选择“单独解密副本”或“从加密文件中删除”。导出文件夹会保留其内部层级；删除文件夹会同时删除其中的全部内容。两项操作都会显示进度，可随时取消。"
+                    <TextBlock x:Name="ArchiveText" Text="点击“追加文件”可在 Windows 风格窗口中选择任意多个文件：普通单击只选一个，按住 Shift 单击可逐个增加；隐藏和系统项目不会显示。遇到同名内容时可逐个比较，或对后续冲突全部替换、自动改名或跳过。文件树支持勾选多个项目后一次删除，并保留原来的右键删除。普通 .nrenc 使用增量修改：新增只暂时占用新增内容的空间，删除立即从列表隐藏但旧数据暂不回收，因此包体积可能暂时不变。批量操作只更新一次加密文件。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="DeliverySection">
+                    <TextBlock x:Name="DeliveryTitle" Text="安全交付" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="DeliveryText" Text="点击主窗口右上角“安全交付”，可把多个文件和文件夹整理成一个 .nrenc 交付包。设置交付名称、密码、有效期和是否允许导出后，程序会先检查资料，再生成并自动复验。接收方需要安装凝然并完成密码及发送者验证。到期后仍可查看交付说明和文件树，但不能打开、播放或导出文件。"
+                               TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
+                </StackPanel>
+                <Separator Margin="0,0,0,22" />
+
+                <StackPanel x:Name="VaultSection">
+                    <TextBlock x:Name="VaultTitle" Text="凝然保险箱" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="VaultText" Text="保险箱适合长期整理和编辑资料。新建时需要选择固定总容量，创建后不能调整；未使用区域会写入随机数据。完成密码及所选保护方式验证后，可通过 Windows 中出现的临时磁盘使用文件，锁定后该磁盘会消失。旧单文件保险箱可使用“升级旧保险箱”另存为新版；原文件不会被覆盖或删除，新版重新读取并完整检查后才显示成功。普通软件可能留下最近记录、自动恢复文件、缩略图、打印记录或云同步副本；重要资料请另行保留备份。卸载凝然不会删除您选择位置的 .nrvault 保险箱。格式版本较新时，程序会停止打开并提示更新，绝不会尝试猜测读取或修改保险箱。"
                                TextWrapping="Wrap" LineHeight="23" Margin="0,10,0,22" />
                 </StackPanel>
                 <Separator Margin="0,0,0,22" />
@@ -74,6 +88,8 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListBoxItem x:Name="NavOverview" Content="开始使用" Padding="10,8" />
                     <ListBoxItem x:Name="NavArchive" Content="查看、导出与修改" Padding="10,8" />
+                    <ListBoxItem x:Name="NavDelivery" Content="安全交付" Padding="10,8" />
+                    <ListBoxItem x:Name="NavVault" Content="凝然保险箱" Padding="10,8" />
                     <ListBoxItem x:Name="NavPasswords" Content="密码、密匙与身份" Padding="10,8" />
                     <ListBoxItem x:Name="NavPrivacy" Content="隐私与本地处理" Padding="10,8" />
                     <ListBoxItem x:Name="NavSecure" Content="严格防护与高安全打开" Padding="10,8" />

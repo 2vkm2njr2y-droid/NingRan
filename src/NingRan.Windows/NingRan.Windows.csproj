@@ -6,6 +6,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="NingRan.DeliveryChecks" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="..\Shared\SecureWebView2Policy.cs" Link="SecureWebView2Policy.cs" />
     <Compile Include="..\Shared\NativeElevationBinding.cs" Link="NativeElevationBinding.cs" />
   </ItemGroup>
@@ -14,6 +18,7 @@
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.1" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+    <PackageReference Include="winfsp.net" Version="2.2.26215" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -26,10 +31,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>NingRan</AssemblyName>
     <RootNamespace>NingRan.Windows</RootNamespace>
-    <Version>6.1.16</Version>
-    <AssemblyVersion>6.1.16.0</AssemblyVersion>
-    <FileVersion>6.1.16.0</FileVersion>
-    <InformationalVersion>6.1.16</InformationalVersion>
+    <Version>9.0.1</Version>
+    <AssemblyVersion>9.0.1.0</AssemblyVersion>
+    <FileVersion>9.0.1.0</FileVersion>
+    <InformationalVersion>9.0.1</InformationalVersion>
     <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
     <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

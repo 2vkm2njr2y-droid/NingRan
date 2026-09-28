@@ -185,7 +185,8 @@ internal sealed class ArchiveHeader
         ReadOnlyMemory<byte> keyFileSecret,
         IPhysicalDeviceProvider deviceProvider,
         nint ownerWindowHandle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        EncryptionMode? expectedMode = null)
     {
         var bytes = await ReadHeaderBytesAsync(stream, cancellationToken).ConfigureAwait(false);
         var kdfParameters = ReadKdfParameters(bytes);
@@ -195,22 +196,31 @@ internal sealed class ArchiveHeader
             passwordKey = await KeyDerivation.DerivePasswordKeyAsync(
                 password, bytes.AsMemory(24, 16), kdfParameters, cancellationToken).ConfigureAwait(false);
 
-            var standardKey = KeyDerivation.DeriveArchiveWrapKey(
-                passwordKey, ReadOnlySpan<byte>.Empty, EncryptionMode.Standard, bytes.AsSpan(24, 16));
-            try
+            if (expectedMode is null or EncryptionMode.Standard)
             {
-                if (TryDecryptPasswordSlot(
-                        bytes, StandardSlotOffset, EncryptionMode.Standard, standardKey, out var dataKey))
+                var standardKey = KeyDerivation.DeriveArchiveWrapKey(
+                    passwordKey, ReadOnlySpan<byte>.Empty, EncryptionMode.Standard, bytes.AsSpan(24, 16));
+                try
                 {
-                    return (new ArchiveHeader(bytes, EncryptionMode.Standard), dataKey, null);
+                    if (TryDecryptPasswordSlot(
+                            bytes, StandardSlotOffset, EncryptionMode.Standard, standardKey, out var dataKey))
+                    {
+                        return (new ArchiveHeader(bytes, EncryptionMode.Standard), dataKey, null);
+                    }
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(standardKey);
                 }
             }
-            finally
+
+            if (expectedMode == EncryptionMode.Standard)
             {
-                CryptographicOperations.ZeroMemory(standardKey);
+                throw new NingRanException("密码不正确，或者加密内容已经损坏。");
             }
 
-            if (keyFileSecret.Length == KeyDerivation.KeySize)
+            if ((expectedMode is null or EncryptionMode.Advanced) &&
+                keyFileSecret.Length == KeyDerivation.KeySize)
             {
                 var advancedKey = KeyDerivation.DeriveArchiveWrapKey(
                     passwordKey, keyFileSecret.Span, EncryptionMode.Advanced, bytes.AsSpan(24, 16));
@@ -228,54 +238,64 @@ internal sealed class ArchiveHeader
                 }
             }
 
-            var requirements = ReadAnonymousRequirements(bytes);
-            PhysicalDeviceUnlock? unlock = null;
-            try
+            if (expectedMode == EncryptionMode.Advanced)
             {
-                unlock = await deviceProvider.UnlockAnonymousAsync(
-                    requirements,
-                    bytes.AsMemory(24, 16),
-                    ownerWindowHandle,
-                    cancellationToken).ConfigureAwait(false);
-                var lookup = PhysicalDevicePrivacy.ComputeLookupHash(unlock.Device, bytes.AsSpan(24, 16));
-                int slotIndex;
+                throw new NingRanException("密码、密匙文件不正确，或者加密内容已经损坏。");
+            }
+
+            var requirements = expectedMode is null or EncryptionMode.PhysicalDevice
+                ? ReadAnonymousRequirements(bytes)
+                : [];
+            PhysicalDeviceUnlock? unlock = null;
+            if (expectedMode is null or EncryptionMode.PhysicalDevice)
+            {
                 try
                 {
-                    slotIndex = requirements.ToList().FindIndex(requirement =>
-                        CryptographicOperations.FixedTimeEquals(requirement.DeviceLookupHash, lookup));
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(lookup);
-                }
-
-                if (slotIndex < 0)
-                {
-                    throw new NingRanException("物理设备没有匹配此文件的匿名授权记录。");
-                }
-
-                var identifier = PhysicalDevicePrivacy.GetIdentifierBytes(unlock.Device);
-                var physicalKey = KeyDerivation.DerivePhysicalDeviceWrapKey(
-                    passwordKey, unlock.Secret.Span, bytes.AsSpan(24, 16), identifier);
-                try
-                {
-                    if (TryDecryptPhysicalSlot(bytes, slotIndex, physicalKey, out var dataKey))
+                    unlock = await deviceProvider.UnlockAnonymousAsync(
+                        requirements,
+                        bytes.AsMemory(24, 16),
+                        ownerWindowHandle,
+                        cancellationToken).ConfigureAwait(false);
+                    var lookup = PhysicalDevicePrivacy.ComputeLookupHash(unlock.Device, bytes.AsSpan(24, 16));
+                    int slotIndex;
+                    try
                     {
-                        return (new ArchiveHeader(bytes, EncryptionMode.PhysicalDevice), dataKey, unlock);
+                        slotIndex = requirements.ToList().FindIndex(requirement =>
+                            CryptographicOperations.FixedTimeEquals(requirement.DeviceLookupHash, lookup));
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(lookup);
                     }
 
-                    unlock.Dispose();
-                    unlock = null;
+                    if (slotIndex < 0)
+                    {
+                        throw new NingRanException("物理设备没有匹配此文件的匿名授权记录。");
+                    }
+
+                    var identifier = PhysicalDevicePrivacy.GetIdentifierBytes(unlock.Device);
+                    var physicalKey = KeyDerivation.DerivePhysicalDeviceWrapKey(
+                        passwordKey, unlock.Secret.Span, bytes.AsSpan(24, 16), identifier);
+                    try
+                    {
+                        if (TryDecryptPhysicalSlot(bytes, slotIndex, physicalKey, out var dataKey))
+                        {
+                            return (new ArchiveHeader(bytes, EncryptionMode.PhysicalDevice), dataKey, unlock);
+                        }
+
+                        unlock.Dispose();
+                        unlock = null;
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(identifier);
+                        CryptographicOperations.ZeroMemory(physicalKey);
+                    }
                 }
-                finally
+                catch (NingRanException)
                 {
-                    CryptographicOperations.ZeroMemory(identifier);
-                    CryptographicOperations.ZeroMemory(physicalKey);
+                    unlock?.Dispose();
                 }
-            }
-            catch (NingRanException)
-            {
-                unlock?.Dispose();
             }
 
             throw new NingRanException(

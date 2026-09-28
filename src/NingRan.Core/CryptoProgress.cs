@@ -15,7 +15,8 @@ public sealed record CryptoProgress(
     long CompletedBytes,
     long TotalBytes,
     string Message,
-    TimeSpan? EstimatedRemaining = null)
+    TimeSpan? EstimatedRemaining = null,
+    double? BytesPerSecond = null)
 {
     public double Fraction => TotalBytes <= 0
         ? 0

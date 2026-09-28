@@ -17,9 +17,16 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
 {
     private const int MaximumRequestBytes = 4 * 1024 * 1024;
     private const int MaximumMediaChunkBytes = 1024 * 1024;
-    private readonly SecureArchiveSession _session;
-    private readonly IReadOnlyDictionary<string, SecureArchiveEntry> _entries;
+    private static readonly string[][] TrustedViewerRelativePaths =
+    [
+        ["弥尔通用文件系统", "Media-Helper", "凝然媒体播放器.exe"],
+        ["Mier", "Media-Helper", "凝然媒体播放器.exe"],
+        ["media-helper", "凝然媒体播放器.exe"],
+    ];
+    private readonly Func<string, Stream> _openEntryReadStream;
+    private readonly IReadOnlyDictionary<string, PlaybackEntry> _entries;
     private readonly string _initialEntryId;
+    private readonly string _initialEntryParentPath;
     private readonly string _pipeName = $"NingRan.Media.{Environment.ProcessId}.{Guid.NewGuid():N}";
     private readonly CancellationTokenSource _shutdown = new();
     private readonly TaskCompletionSource _secureSessionConfirmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -33,16 +40,34 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
 
     public MediaPlaybackHost(SecureArchiveSession session, IReadOnlyList<SecureArchiveEntry> entries, SecureArchiveEntry initialEntry)
     {
-        _session = session;
+        _openEntryReadStream = session.OpenEntryReadStream;
         // Media-Helper 自身已经支持音频、视频、图片和 PDF；这些条目都由
         // 独立窗口安全查看。无法启动或未安装时，调用方会回退内置查看器。
         _entries = entries.Where(CanOpenWithExternalViewer)
-            .ToDictionary(entry => entry.RelativePath, StringComparer.Ordinal);
+            .Select(entry => new PlaybackEntry(entry.RelativePath, entry.Name, entry.Length,
+                NrMediaFiles.GetContentType(entry.Name), ToPlayerKind(entry.MediaKind)))
+            .ToDictionary(entry => entry.Id, StringComparer.Ordinal);
         if (_entries.Count == 0 || !_entries.ContainsKey(initialEntry.RelativePath))
         {
             throw new ArgumentException("安全查看器没有可打开的媒体文件。", nameof(entries));
         }
         _initialEntryId = initialEntry.RelativePath;
+        _initialEntryParentPath = GetArchiveParentPath(initialEntry.RelativePath);
+    }
+
+    public MediaPlaybackHost(VaultSession session, IReadOnlyList<VaultEntry> entries, VaultEntry initialEntry)
+    {
+        _openEntryReadStream = session.OpenReadStream;
+        _entries = entries.Where(CanOpenWithExternalViewer)
+            .Select(entry => new PlaybackEntry(entry.RelativePath, entry.Name, entry.Length,
+                NrMediaFiles.GetContentType(entry.Name), ToPlayerKind(NrMediaFiles.TryGetKind(entry.Name))))
+            .ToDictionary(entry => entry.Id, StringComparer.Ordinal);
+        if (_entries.Count == 0 || !_entries.ContainsKey(initialEntry.RelativePath))
+        {
+            throw new ArgumentException("安全查看器没有可打开的媒体文件。", nameof(entries));
+        }
+        _initialEntryId = initialEntry.RelativePath;
+        _initialEntryParentPath = GetArchiveParentPath(initialEntry.RelativePath);
     }
 
     public event EventHandler<MediaPlayerStoppedEventArgs>? PlayerStoppedUnexpectedly;
@@ -52,21 +77,33 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
         entry.MediaKind is SecureMediaKind.Audio or SecureMediaKind.Video or
             SecureMediaKind.Image or SecureMediaKind.Pdf;
 
-    public static string? FindExternalViewer()
+    public static bool CanOpenWithExternalViewer(VaultEntry entry) =>
+        !entry.IsDirectory &&
+        NrMediaFiles.TryGetKind(entry.Name) is SecureMediaKind.Audio or SecureMediaKind.Video or
+            SecureMediaKind.Image or SecureMediaKind.Pdf;
+
+    public static string? FindExternalViewer() => FindExternalViewer(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+
+    internal static string? FindExternalViewer(string programFilesDirectory)
     {
         // 播放器独立安装在受保护的 Program Files 目录。不要接受环境变量、当前
         // 文件夹或用户目录中的同名程序，否则解锁会话可能被交给伪装的查看器。
-        var playerDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "media-helper");
-        var candidate = Path.GetFullPath(Path.Combine(playerDirectory, "凝然媒体播放器.exe"));
-        return string.Equals(
-                   Path.GetDirectoryName(candidate),
-                   Path.TrimEndingDirectorySeparator(Path.GetFullPath(playerDirectory)),
-                   StringComparison.OrdinalIgnoreCase) &&
-               File.Exists(candidate)
-            ? candidate
-            : null;
+        if (string.IsNullOrWhiteSpace(programFilesDirectory)) return null;
+
+        var trustedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(programFilesDirectory));
+        foreach (var relativePath in TrustedViewerRelativePaths)
+        {
+            var candidate = Path.GetFullPath(Path.Combine([trustedRoot, .. relativePath]));
+            if (!candidate.StartsWith(trustedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
     }
 
     public async Task StartAsync(string playerPath)
@@ -97,6 +134,8 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
                 WorkingDirectory = Path.GetDirectoryName(playerPath) ?? AppContext.BaseDirectory,
                 UseShellExecute = false,
                 RedirectStandardInput = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
             info.ArgumentList.Add("--ningran-secure-pipe");
             info.ArgumentList.Add(_pipeName);
@@ -104,6 +143,8 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
             info.ArgumentList.Add(_initialEntryId);
 
             var player = Process.Start(info) ?? throw new InvalidOperationException("Windows 没有启动独立播放器。");
+            _ = DrainPlayerOutputAsync(player.StandardOutput);
+            _ = DrainPlayerOutputAsync(player.StandardError);
             player.EnableRaisingEvents = true;
             player.Exited += Player_Exited;
             lock (_sync) _player = player;
@@ -114,6 +155,16 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
             await DisposeAsync();
             throw;
         }
+    }
+
+    private static async Task DrainPlayerOutputAsync(StreamReader reader)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is not null) { }
+        }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
     }
 
     private async Task AcceptLoopAsync()
@@ -190,19 +241,19 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
 
             if (string.Equals(request.Kind, "catalog", StringComparison.Ordinal))
             {
-                var files = _entries.Values.Select(entry => new MediaPipeCatalogEntry(
-                    entry.RelativePath,
-                    entry.Name,
-                    entry.Length,
-                    NrMediaFiles.GetContentType(entry.Name),
-                    entry.MediaKind switch
-                    {
-                        SecureMediaKind.Video => "video",
-                        SecureMediaKind.Audio => "audio",
-                        SecureMediaKind.Image => "image",
-                        SecureMediaKind.Pdf => "pdf",
-                        _ => "text",
-                    })).ToArray();
+                var files = _entries.Values
+                    .Where(entry => request.Recursive || string.Equals(
+                        GetArchiveParentPath(entry.Id),
+                        _initialEntryParentPath,
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(entry => new MediaPipeCatalogEntry(
+                        entry.Id,
+                        entry.Name,
+                        entry.Length,
+                        entry.Mime,
+                        entry.Kind,
+                        entry.Id))
+                    .ToArray();
                 await WriteFrameAsync(server, new MediaPipeResponse(true, Entries: files), _shutdown.Token).ConfigureAwait(false);
                 _secureSessionConfirmed.TrySetResult();
                 return;
@@ -225,7 +276,7 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
             await WriteFrameAsync(server, new MediaPipeResponse(true, null, request.Start, length, entry.Length,
                 NrMediaFiles.GetContentType(entry.Name)), _shutdown.Token).ConfigureAwait(false);
 
-            await using var source = _session.OpenEntryReadStream(entry.RelativePath);
+            await using var source = _openEntryReadStream(entry.Id);
             source.Position = request.Start;
             await CopyExactlyAsync(source, server, length, _shutdown.Token).ConfigureAwait(false);
         }
@@ -308,6 +359,21 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
         return clientProcessId == player.Id;
     }
 
+    private static string GetArchiveParentPath(string relativePath)
+    {
+        var separator = relativePath.LastIndexOf('/');
+        return separator < 0 ? string.Empty : relativePath[..separator];
+    }
+
+    private static string ToPlayerKind(SecureMediaKind? kind) => kind switch
+    {
+        SecureMediaKind.Video => "video",
+        SecureMediaKind.Audio => "audio",
+        SecureMediaKind.Image => "image",
+        SecureMediaKind.Pdf => "pdf",
+        _ => "text",
+    };
+
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetNamedPipeClientProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint clientProcessId);
@@ -350,6 +416,8 @@ internal sealed class MediaPlaybackHost : IAsyncDisposable
     }
 }
 
+internal sealed record PlaybackEntry(string Id, string Name, long Length, string Mime, string Kind);
+
 internal sealed class MediaPlayerStoppedEventArgs : EventArgs
 {
     public MediaPlayerStoppedEventArgs(string fileName, string reason)
@@ -361,7 +429,9 @@ internal sealed class MediaPlayerStoppedEventArgs : EventArgs
     public string FileName { get; }
     public string Reason { get; }
 }
-internal sealed record MediaPipeRequest(string Kind, long Start = 0, long Length = 0, string? Message = null, string? Path = null);
+internal sealed record MediaPipeRequest(string Kind, long Start = 0, long Length = 0, string? Message = null, string? Path = null,
+    bool Recursive = false);
 internal sealed record MediaPipeResponse(bool Success, string? Error = null, long Start = 0, long Length = 0,
     long TotalLength = 0, string? ContentType = null, IReadOnlyList<MediaPipeCatalogEntry>? Entries = null);
-internal sealed record MediaPipeCatalogEntry(string Id, string Name, long Length, string Mime, string Kind);
+internal sealed record MediaPipeCatalogEntry(string Id, string Name, long Length, string Mime, string Kind,
+    string RelativePath);

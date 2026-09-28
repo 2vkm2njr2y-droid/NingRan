@@ -6,10 +6,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>NingRan.StrictMonitor</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>6.1.16</Version>
-    <AssemblyVersion>6.1.16.0</AssemblyVersion>
-    <FileVersion>6.1.16.0</FileVersion>
-    <InformationalVersion>6.1.16</InformationalVersion>
+    <Version>9.0.1</Version>
+    <AssemblyVersion>9.0.1.0</AssemblyVersion>
+    <FileVersion>9.0.1.0</FileVersion>
+    <InformationalVersion>9.0.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

@@ -1,5 +1,7 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -25,6 +27,8 @@ public partial class MainWindow : Window
     private readonly TrustedContactBrokerClient _trustedContactBrokerClient;
     private readonly NrPhysicalDeviceService _physicalDeviceService = new();
     private readonly NrArchiveService _archiveService;
+    private readonly RecentArchiveHistory _recentArchiveHistory = new();
+    private readonly RecentDeliveryHistory _recentDeliveryHistory = new();
     private readonly Effect? _normalWindowEffect;
     private CancellationTokenSource? _operationCancellation;
     private ProgressWindow? _progressWindow;
@@ -36,6 +40,7 @@ public partial class MainWindow : Window
     private bool _physicalOperationActive;
     private HwndSource? _windowSource;
     private SecureArchiveSession? _archiveSession;
+    private CancellationTokenRegistration _archiveSessionRegistration;
     private readonly StrictProtectionCoordinator _strictProtection = new();
     private StrictProtectionSettings _strictProtectionSettings = new();
     private bool _strictThreatHandled;
@@ -44,7 +49,10 @@ public partial class MainWindow : Window
     private bool _closingAnimationComplete;
     private readonly bool _allowElevatedMediaBrowsing;
     private readonly HashSet<MediaPlaybackHost> _activeExternalMediaViewers = [];
+    private readonly HashSet<string> _checkedArchivePaths = new(StringComparer.OrdinalIgnoreCase);
     private MediaViewerFailurePreferences _mediaViewerFailurePreferences = new();
+    private MediaPlayerPreferences _mediaPlayerPreferences = new();
+    private string _unlockedSearchQuery = string.Empty;
 
     public MainWindow(bool allowElevatedMediaBrowsing = false)
     {
@@ -68,10 +76,12 @@ public partial class MainWindow : Window
             SourceDropArea.IsEnabled = false;
             SourceDropArea.Opacity = 0.55;
             PickFolderButton.Visibility = Visibility.Collapsed;
-            PickFileButton.Content = UiLanguage.IsEnglish ? "Choose .nrenc encrypted file" : "选择 .nrenc 加密文件";
+            PickBatchButton.Visibility = Visibility.Collapsed;
+            PickFileButton.Content = UiLanguage.IsEnglish ? "Choose encrypted photo or legacy file" : "选择加密照片或旧版文件";
             EncryptRadio.IsEnabled = false;
             DecryptRadio.IsChecked = true;
             StrictProtectionButton.Visibility = Visibility.Collapsed;
+            MediaPlayerSettingsButton.Visibility = Visibility.Collapsed;
             PickSenderPublicIdentityButton.Visibility = Visibility.Collapsed;
             ManageTrustedContactsButton.Visibility = Visibility.Collapsed;
             ManagePhysicalDevicesButton.Visibility = Visibility.Collapsed;
@@ -83,6 +93,7 @@ public partial class MainWindow : Window
         else
         {
             _mediaViewerFailurePreferences = MediaViewerFailurePreferences.Load();
+            _mediaPlayerPreferences = MediaPlayerPreferences.Load();
             RefreshIdentityList();
             MigrateTrustedContactStorage();
         }
@@ -101,6 +112,7 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         RefreshSettingsRegion();
         RefreshStrictProtectionButton();
+        RefreshMediaPlayerSettingsButton();
     }
 
     private bool IsEncrypting => EncryptRadio.IsChecked == true;
@@ -135,6 +147,16 @@ public partial class MainWindow : Window
         _ => ArchiveCompressionLevel.Standard,
     };
 
+    private void CompressionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (LossyCompressionWarning is not null)
+        {
+            LossyCompressionWarning.Visibility = CompressionCombo.SelectedIndex == 3
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
     private IdentitySummary? SelectedSigningIdentity =>
         SigningIdentityCombo.SelectedItem as IdentitySummary;
 
@@ -147,12 +169,99 @@ public partial class MainWindow : Window
         helpWindow.Show();
     }
 
+    private void MediaPlayerSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing) return;
+
+        var dialog = new MediaPlayerSettingsWindow(
+            _mediaPlayerPreferences,
+            MediaPlaybackHost.FindExternalViewer() is not null)
+        {
+            Owner = this,
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        var updated = new MediaPlayerPreferences { AudioVideoPlayer = dialog.SelectedChoice };
+        try
+        {
+            updated.Save();
+            _mediaPlayerPreferences = updated;
+            RefreshMediaPlayerSettingsButton();
+        }
+        catch (Exception exception)
+        {
+            ShowFriendlyError("无法保存播放器设置", exception);
+        }
+    }
+
+    private async void RecentArchives_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _allowElevatedMediaBrowsing) return;
+
+        var archives = _recentArchiveHistory.Load()
+            .Where(entry => File.Exists(entry.Path) && NrArchiveService.IsSupportedArchiveFile(entry.Path))
+            .OrderByDescending(entry => entry.OpenedAtUtc)
+            .ToArray();
+        var deliveries = _recentDeliveryHistory.Load()
+            .Where(entry => File.Exists(entry.Path) && NrArchiveService.IsSupportedArchiveFile(entry.Path))
+            .OrderByDescending(entry => entry.CreatedAtUtc)
+            .ToArray();
+        if (archives.Length == 0 && deliveries.Length == 0)
+        {
+            MessageBox.Show(this, "暂时没有可打开的历史文件。历史不会保存密码、密匙或包内文件清单。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new Window
+        {
+            Owner = this, Title = "历史记录", Width = 700, Height = 460,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (Brush)FindResource("PageBrush"),
+        };
+        var root = new Grid { Margin = new Thickness(22) };
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var archiveList = new ListBox { DisplayMemberPath = nameof(RecentArchiveItem.Path), ItemsSource = archives };
+        var deliveryList = new ListBox { DisplayMemberPath = nameof(RecentDeliveryItem.DisplayText), ItemsSource = deliveries };
+        var tabs = new TabControl();
+        tabs.Items.Add(new TabItem { Header = "最近安全打开", Content = archiveList });
+        tabs.Items.Add(new TabItem { Header = "最近生成的安全交付", Content = deliveryList });
+        tabs.SelectedIndex = deliveries.Length > 0 && archives.Length == 0 ? 1 : 0;
+        root.Children.Add(tabs);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
+        var clear = new Button { Content = "清空历史", Margin = new Thickness(0, 0, 8, 0) };
+        clear.Click += (_, _) =>
+        {
+            if (tabs.SelectedIndex == 1) _recentDeliveryHistory.Clear();
+            else _recentArchiveHistory.Clear();
+            dialog.DialogResult = false;
+        };
+        var open = new Button { Content = "打开", IsDefault = true, Style = (Style)FindResource("PrimaryButton") };
+        open.Click += (_, _) =>
+        {
+            if (tabs.SelectedIndex == 1 ? deliveryList.SelectedItem is not null : archiveList.SelectedItem is not null)
+                dialog.DialogResult = true;
+        };
+        buttons.Children.Add(clear); buttons.Children.Add(open);
+        Grid.SetRow(buttons, 1); root.Children.Add(buttons); dialog.Content = root;
+        if (dialog.ShowDialog() == true)
+        {
+            var selectedPath = tabs.SelectedIndex == 1
+                ? (deliveryList.SelectedItem as RecentDeliveryItem)?.Path
+                : (archiveList.SelectedItem as RecentArchiveItem)?.Path;
+            if (!string.IsNullOrWhiteSpace(selectedPath)) await SetSourceAsync(selectedPath);
+        }
+    }
+
     private async void PickFile_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog
         {
             Title = _allowElevatedMediaBrowsing ? "选择需要高安全查看的凝然加密文件" : "选择需要加密或解密的文件",
-            Filter = _allowElevatedMediaBrowsing ? "凝然加密文件|*.nrenc" : "所有文件|*.*|凝然加密文件|*.nrenc",
+            Filter = _allowElevatedMediaBrowsing
+                ? "凝然加密照片或旧版文件|*.jpg;*.jpeg;*.nrenc"
+                : "所有文件|*.*|凝然加密照片或旧版文件|*.jpg;*.jpeg;*.nrenc",
             CheckFileExists = true,
         };
         if (dialog.ShowDialog(this) == true)
@@ -180,6 +289,103 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void PickBatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || !IsEncrypting)
+        {
+            MessageBox.Show(this, "请先保持在“加密”页面，再使用批量加密。", AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new OpenFileDialog { Title = "选择要依次加密的文件", Filter = "所有文件|*.*", CheckFileExists = true, Multiselect = true };
+        if (dialog.ShowDialog(this) != true || dialog.FileNames.Length == 0) return;
+        await EncryptBatchAsync(dialog.FileNames);
+    }
+
+    private async Task EncryptBatchAsync(IReadOnlyList<string> paths)
+    {
+        var destination = string.IsNullOrWhiteSpace(DestinationInput.Text)
+            ? Path.GetDirectoryName(paths[0])!
+            : DestinationInput.Text;
+        if (CurrentMode == EncryptionMode.Advanced &&
+            (string.IsNullOrWhiteSpace(CurrentKeyFilePath) || !File.Exists(CurrentKeyFilePath)))
+        {
+            MessageBox.Show(this, "高级模式必须先选择有效的密匙文件。批量期间不会保存该密匙路径。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (CurrentMode == EncryptionMode.PhysicalDevice && SelectedPhysicalDevices.Count == 0)
+        {
+            MessageBox.Show(this, "物理设备模式必须先选择至少一个已登记设备。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        using var signingPasswordCheck = SignIdentityCheck.IsChecked == true
+            ? ReadPassword(SigningIdentityPasswordInput)
+            : null;
+        if (SignIdentityCheck.IsChecked == true && (SelectedSigningIdentity is null || signingPasswordCheck is null || signingPasswordCheck.IsEmpty))
+        {
+            MessageBox.Show(this, "批量加密需要选择发送者身份并填写身份密码。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        using (var passwordCheck = ReadPassword(EncryptPasswordInput))
+        {
+            if (passwordCheck.IsEmpty)
+            {
+                MessageBox.Show(this, "请先填写加密密码。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            try { PasswordRules.ValidateForCreation(passwordCheck); }
+            catch (ArgumentException exception) { MessageBox.Show(this, exception.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        }
+
+        try { Directory.CreateDirectory(destination); }
+        catch (Exception exception) { ShowFriendlyError("无法使用所选保存位置", exception); return; }
+        if (MessageBox.Show(this, $"将依次加密 {paths.Count:N0} 个文件。所有文件共用当前填写的密码、密匙和设备；原文件不会删除。是否开始？",
+                "确认批量加密", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(true, "正在批量加密") { Owner = this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
+        var succeeded = 0;
+        var failed = 0;
+        try
+        {
+            SetBusy(true); _progressWindow.Show();
+            foreach (var path in paths)
+            {
+                if (_operationCancellation.IsCancellationRequested) break;
+                try
+                {
+                    using var password = ReadPassword(EncryptPasswordInput);
+                    using var signingPassword = SignIdentityCheck.IsChecked == true ? ReadPassword(SigningIdentityPasswordInput) : null;
+                    var output = GetUniqueArchivePath(destination, Path.GetFileName(path), ".nrenc");
+                    using var request = new EncryptRequest(path, output, password, CurrentMode, CurrentKeyFilePath,
+                        CurrentSizePadding, CurrentCompression, SignIdentityCheck.IsChecked == true ? SelectedSigningIdentity?.Id : null,
+                        signingPassword, CurrentMode == EncryptionMode.PhysicalDevice ? SelectedPhysicalDevices : null,
+                        new WindowInteropHelper(this).Handle);
+                    await _archiveService.EncryptAsync(request, progress, _operationCancellation.Token);
+                    succeeded++;
+                    OperationLog.Append("批量加密", output, "成功");
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception exception)
+                {
+                    failed++;
+                    OperationLog.Append("批量加密", path, "失败", exception.Message);
+                }
+            }
+            CloseProgressWindow();
+            MessageBox.Show(this, $"批量处理完成。\n\n成功：{succeeded:N0} 个\n失败：{failed:N0} 个\n\n原文件没有被删除。", AppName,
+                MessageBoxButton.OK, failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        finally
+        {
+            CloseProgressWindow(); _operationCancellation?.Dispose(); _operationCancellation = null; SetBusy(false);
+        }
+    }
+
     private void PickDestination_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog
@@ -196,6 +402,20 @@ public partial class MainWindow : Window
 
     private void PickEncryptKeyFile_Click(object sender, RoutedEventArgs e) =>
         PickKeyFile(EncryptKeyFilePathInput);
+
+    private void PickCoverImage_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择加密成品显示的封面照片",
+            Filter = "常见照片|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tif;*.tiff|所有文件|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            CoverImagePathInput.Text = dialog.FileName;
+        }
+    }
 
     private void PickDecryptKeyFile_Click(object sender, RoutedEventArgs e) =>
         PickKeyFile(DecryptKeyFilePathInput);
@@ -462,13 +682,12 @@ public partial class MainWindow : Window
         {
             var fullPath = Path.GetFullPath(path);
             var extension = Path.GetExtension(fullPath);
-            if (_allowElevatedMediaBrowsing &&
-                !string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase))
+            if (_allowElevatedMediaBrowsing && !NrArchiveService.IsSupportedArchiveFile(fullPath))
             {
                 throw new InvalidOperationException("高安全查看只接受凝然加密文件，不导入或修改身份、联系人及其他设置。");
             }
 
-            if (string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase))
+            if (NrArchiveService.IsSupportedArchiveFile(fullPath))
             {
                 await SetSourceAsync(fullPath);
             }
@@ -781,7 +1000,7 @@ public partial class MainWindow : Window
 
         if (_allowElevatedMediaBrowsing &&
             (IsEncrypting || string.IsNullOrWhiteSpace(_sourcePath) || !File.Exists(_sourcePath) ||
-             !string.Equals(Path.GetExtension(_sourcePath), ".nrenc", StringComparison.OrdinalIgnoreCase)))
+             !NrArchiveService.IsSupportedArchiveFile(_sourcePath)))
         {
             ShowHighSecurityViewingOnlyMessage();
             return;
@@ -790,6 +1009,21 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_sourcePath) || (!File.Exists(_sourcePath) && !Directory.Exists(_sourcePath)))
         {
             MessageBox.Show(this, "请先选择存在的文件或文件夹。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var destination = IsEncrypting
+            ? (string.IsNullOrWhiteSpace(DestinationInput.Text)
+                ? Path.GetDirectoryName(_sourcePath)!
+                : DestinationInput.Text)
+            : string.Empty;
+        var usesPhotoArchive = IsEncrypting && NrArchiveService.SupportsPhotoArchiveOutput(destination);
+
+        if (usesPhotoArchive &&
+            (string.IsNullOrWhiteSpace(CoverImagePathInput.Text) || !File.Exists(CoverImagePathInput.Text)))
+        {
+            MessageBox.Show(this, "请先选择一张存在的照片作为封面。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -881,9 +1115,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var destination = string.IsNullOrWhiteSpace(DestinationInput.Text)
-            ? Path.GetDirectoryName(_sourcePath)!
-            : DestinationInput.Text;
         try
         {
             Directory.CreateDirectory(destination);
@@ -947,6 +1178,7 @@ public partial class MainWindow : Window
         _progressWindow = new ProgressWindow(IsEncrypting) { Owner = this };
         _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
         var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
+        CoverImagePreparation? preparedCover = null;
         SetBusy(true);
         _progressWindow.Show();
 
@@ -954,8 +1186,17 @@ public partial class MainWindow : Window
         {
             if (IsEncrypting)
             {
-                var output = GetUniqueArchivePath(destination, Path.GetFileName(_sourcePath));
+                if (usesPhotoArchive)
+                {
+                    preparedCover = CoverImagePreparation.Create(CoverImagePathInput.Text);
+                }
+
+                var output = GetUniqueArchivePath(
+                    destination,
+                    Path.GetFileName(_sourcePath),
+                    usesPhotoArchive ? ".jpg" : ".nrenc");
                 EncryptionResult result;
+                var compressionTimer = Stopwatch.StartNew();
                 using (var request = new EncryptRequest(
                         _sourcePath,
                         output,
@@ -967,7 +1208,8 @@ public partial class MainWindow : Window
                         SignIdentityCheck.IsChecked == true ? SelectedSigningIdentity?.Id : null,
                         SignIdentityCheck.IsChecked == true ? signingPassword : null,
                         CurrentMode == EncryptionMode.PhysicalDevice ? SelectedPhysicalDevices : null,
-                        new WindowInteropHelper(this).Handle))
+                        new WindowInteropHelper(this).Handle,
+                        preparedCover?.Path))
                 {
                     result = await _archiveService.EncryptAsync(
                         request,
@@ -976,6 +1218,9 @@ public partial class MainWindow : Window
                 }
 
                 CloseProgressWindow();
+                compressionTimer.Stop();
+                ShowCompressionReport(result.SizeReport, compressionTimer.Elapsed, "加密完成");
+                OperationLog.Append("加密", result.ArchivePath, "成功");
                 var deleteOriginal = MessageBox.Show(
                     this,
                     $"加密文件已经完成并通过验证。\n\n" +
@@ -1039,6 +1284,7 @@ public partial class MainWindow : Window
                 }
 
                 CloseProgressWindow();
+                OperationLog.Append("还原", _sourcePath, "成功");
                 var senderMessage = result.VerifiedSenderName is null
                     ? "\n\n此文件没有发送者身份证明。"
                     : $"\n\n已核验的可信联系人：{result.VerifiedSenderName}";
@@ -1070,6 +1316,7 @@ public partial class MainWindow : Window
             ClearPasswords();
             EncryptKeyFilePathInput.Clear();
             DecryptKeyFilePathInput.Clear();
+            preparedCover?.Dispose();
 
             if (_closeAfterCancellation)
             {
@@ -1106,13 +1353,7 @@ public partial class MainWindow : Window
                 request,
                 allowElevated: _allowElevatedMediaBrowsing);
             CloseArchiveSession();
-            _archiveSession = session;
-            _physicalOperationActive = CurrentMode == EncryptionMode.PhysicalDevice;
-            UnlockedArchiveStatusText.Text =
-                $"已验证可信发送者：{session.VerifiedSenderName}\n" +
-                "文件内容只会在程序内按需读取；关闭安全查看后，内存中的解锁材料会立即清除。";
-            BuildUnlockedFileTree(session);
-            RefreshSettingsRegion();
+            ShowUnlockedArchiveSession(session);
         }
         catch (Exception exception)
         {
@@ -1125,16 +1366,128 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShowUnlockedArchiveSession(SecureArchiveSession session)
+    {
+        _archiveSession = session;
+        if (!_allowElevatedMediaBrowsing)
+        {
+            _recentArchiveHistory.Add(session.ArchivePath);
+            OperationLog.Append("安全打开", session.ArchivePath, "成功", $"{session.Entries.Count} 项内容");
+        }
+        _physicalOperationActive = session.Mode == EncryptionMode.PhysicalDevice;
+        UnlockedArchiveStatusText.Text =
+            (session.SenderIsTrusted
+                ? $"已验证可信发送者：{session.VerifiedSenderName}\n"
+                : $"发送者签名有效，但尚未在本机确认为可信联系人：{session.VerifiedSenderName}\n") +
+            "文件内容只会在程序内按需读取；关闭安全查看后，内存中的解锁材料会立即清除。";
+        _archiveSessionRegistration.Dispose();
+        _archiveSessionRegistration = session.CancellationToken.Register(() => Dispatcher.BeginInvoke(() =>
+        {
+            if (ReferenceEquals(_archiveSession, session) && session.IsDelivery)
+            {
+                RefreshDeliveryPresentation(session);
+            }
+        }));
+        RefreshDeliveryPresentation(session);
+        BuildUnlockedFileTree(session);
+        RefreshSettingsRegion();
+    }
+
+    private void RefreshDeliveryPresentation(SecureArchiveSession session)
+    {
+        if (session.DeliveryInfo is not { } delivery)
+        {
+            DeliveryInfoPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DeliveryInfoPanel.Visibility = Visibility.Visible;
+        DeliveryNameText.Text = delivery.Name;
+        DeliveryDescriptionText.Text = string.IsNullOrWhiteSpace(delivery.Description)
+            ? "发送方未填写交付说明。"
+            : delivery.Description;
+        var created = delivery.CreatedAtUtc.ToLocalTime();
+        var expires = delivery.ExpiresAtUtc?.ToLocalTime();
+        var recipientStatus = delivery.RecipientFingerprint is null
+            ? "未指定"
+            : _identityService.HasLocalIdentityFingerprint(delivery.RecipientFingerprint)
+                ? $"{delivery.RecipientName}（与本机身份匹配）"
+                : $"{delivery.RecipientName}（本机身份不匹配，不能显示为已确认接收方）";
+        DeliveryRulesText.Text =
+            $"发送方：{session.VerifiedSenderName}（{(session.SenderIsTrusted ? "本机已确认" : "本机未确认")}）\n" +
+            $"创建时间：{created:g}\n" +
+            $"有效截止：{(expires is null ? "永久有效" : expires.Value.ToString("g"))}\n" +
+            $"当前状态：{(session.IsExpired ? "已过期" : "有效")}\n" +
+            $"明文导出：{(delivery.AllowExport ? "允许" : "发送方已禁止")}\n" +
+            $"接收对象：{recipientStatus}";
+        DeliveryExpiryNoticeText.Text = session.IsExpired
+            ? "此交付包已过期。你仍可查看交付信息和文件列表，但不能打开或导出文件。"
+            : "有效期依赖本机时间；凝然会在到期时立即停止已有内容读取。";
+        RefreshSettingsRegion();
+    }
+
+    private void ArchiveSizeInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_archiveSession is null) return;
+        ShowCompressionReport(_archiveSession.SizeReport, null, "加密文件体积信息");
+    }
+
+    private void ShowCompressionReport(ArchiveSizeReport report, TimeSpan? elapsed, string title)
+    {
+        var compressionName = report.Compression switch
+        {
+            ArchiveCompressionLevel.Store => "存储（不压缩）",
+            ArchiveCompressionLevel.Fastest => "最快",
+            ArchiveCompressionLevel.Standard => "标准（按文件类型判断）",
+            ArchiveCompressionLevel.Maximum => "完整（全部尝试压缩）",
+            _ => "旧版压缩方式",
+        };
+        var timeLine = elapsed is null ? string.Empty : $"\n处理耗时：{elapsed.Value:hh\\:mm\\:ss}";
+        MessageBox.Show(this,
+            $"压缩方式：{compressionName}\n\n" +
+            $"原始内容：{FormatByteSize(report.ContentBytes)}\n" +
+            $"实际保存的数据：{FormatByteSize(report.StoredContentBytes)}\n" +
+            $"压缩节省：{FormatByteSize(report.SavedBytes)}（{report.SavedPercent:F1}%）\n" +
+            $"加密结构额外占用：{FormatByteSize(report.StructureBytes)}\n" +
+            $"加密内容总体积：{FormatByteSize(report.ArchiveBytes)}" + timeLine,
+            title, MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private void BuildUnlockedFileTree(SecureArchiveSession session)
     {
+        _checkedArchivePaths.Clear();
         UnlockedFileTree.Items.Clear();
+        var query = _unlockedSearchQuery.Trim();
+        var visiblePaths = string.IsNullOrWhiteSpace(query)
+            ? null
+            : session.Entries
+                .Where(entry => entry.RelativePath.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                                Path.GetExtension(entry.Name).Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                                (!entry.IsDirectory && entry.Length.ToString("N0").Contains(query, StringComparison.CurrentCultureIgnoreCase)) ||
+                                (entry.LastWriteUtcTicks > 0 && new DateTime(entry.LastWriteUtcTicks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss").Contains(query, StringComparison.CurrentCultureIgnoreCase)))
+                .Select(entry => entry.RelativePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (visiblePaths is not null)
+        {
+            foreach (var path in visiblePaths.ToArray())
+            {
+                for (var parent = GetArchiveParentPath(path); parent is not null; parent = GetArchiveParentPath(parent))
+                {
+                    visiblePaths.Add(parent);
+                }
+            }
+        }
         var items = new Dictionary<string, TreeViewItem>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in session.Entries.OrderBy(entry => entry.RelativePath.Count(character => character == '/'))
                      .ThenBy(entry => !entry.IsDirectory).ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase))
         {
+            if (visiblePaths is not null && !visiblePaths.Contains(entry.RelativePath)) continue;
             var item = new TreeViewItem
             {
-                Header = CreateUnlockedFileHeader(entry.IsDirectory ? "📁" : GetUnlockedFileIcon(entry), entry.Name),
+                Header = CreateUnlockedFileHeader(
+                    entry,
+                    entry.IsDirectory ? "📁" : GetUnlockedFileIcon(entry),
+                    !string.Equals(entry.RelativePath, session.RootName, StringComparison.OrdinalIgnoreCase)),
                 Tag = entry,
             };
             items[entry.RelativePath] = item;
@@ -1153,31 +1506,133 @@ public partial class MainWindow : Window
         {
             item.IsExpanded = true;
         }
+
+        UpdateCheckedArchiveStatus();
     }
 
-    private static FrameworkElement CreateUnlockedFileHeader(string icon, string name)
+    private void UnlockedSearchInput_TextChanged(object sender, TextChangedEventArgs e)
     {
-        var header = new Grid { ToolTip = name };
+        _unlockedSearchQuery = UnlockedSearchInput.Text;
+        if (_archiveSession is not null) BuildUnlockedFileTree(_archiveSession);
+    }
+
+    private async void VerifyUnlockedArchive_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || _archiveSession is null) return;
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(false, "正在完整检查加密文件") { Owner = this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        try
+        {
+            SetBusy(true); _progressWindow.Show();
+            await _archiveSession.ValidateAsync(_operationCancellation.Token);
+            CloseProgressWindow();
+            OperationLog.Append("完整检查", _archiveSession.ArchivePath, "通过");
+            MessageBox.Show(this, "完整检查已经通过。程序没有导出或保存明文文件。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            OperationLog.Append("完整检查", _archiveSession.ArchivePath, "已取消");
+        }
+        catch (Exception exception)
+        {
+            OperationLog.Append("完整检查", _archiveSession.ArchivePath, "失败", exception.Message);
+            ShowFriendlyError("完整检查失败", exception);
+        }
+        finally
+        {
+            CloseProgressWindow(); _operationCancellation?.Dispose(); _operationCancellation = null; SetBusy(false);
+        }
+    }
+
+    private void ExportOperationLog_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog { Title = "导出操作记录", Filter = "日志文件|*.jsonl", DefaultExt = ".jsonl", AddExtension = true, FileName = "ningran-operations.jsonl", OverwritePrompt = false };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            OperationLog.Export(dialog.FileName);
+            MessageBox.Show(this, "操作记录已经导出。记录不包含密码、密匙、文件内容或完整路径。", AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception) { ShowFriendlyError("无法导出操作记录", exception); }
+    }
+
+    private FrameworkElement CreateUnlockedFileHeader(SecureArchiveEntry entry, string icon, bool canDelete)
+    {
+        var header = new Grid { ToolTip = entry.Name };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.Children.Add(new TextBlock { Text = icon, Margin = new Thickness(0, 0, 6, 0) });
+        var deleteCheck = new CheckBox
+        {
+            Tag = entry.RelativePath,
+            IsEnabled = canDelete && !_allowElevatedMediaBrowsing,
+            Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible,
+            Margin = new Thickness(0, 0, 7, 0),
+            ToolTip = canDelete ? "勾选后可一次删除多个项目" : "最外层根内容必须保留",
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        deleteCheck.Checked += ArchiveDeleteCheck_Changed;
+        deleteCheck.Unchecked += ArchiveDeleteCheck_Changed;
+        header.Children.Add(deleteCheck);
+        var iconText = new TextBlock { Text = icon, Margin = new Thickness(0, 0, 6, 0) };
+        Grid.SetColumn(iconText, 1);
+        header.Children.Add(iconText);
         var nameText = new TextBlock
         {
-            Text = name,
+            Text = entry.Name,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = name,
+            ToolTip = entry.Name,
         };
-        Grid.SetColumn(nameText, 1);
+        Grid.SetColumn(nameText, 2);
         header.Children.Add(nameText);
         return header;
     }
 
+    private void ArchiveDeleteCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { Tag: string path } checkBox)
+        {
+            return;
+        }
+
+        if (checkBox.IsChecked == true) _checkedArchivePaths.Add(path);
+        else _checkedArchivePaths.Remove(path);
+        UpdateCheckedArchiveStatus();
+        e.Handled = true;
+    }
+
+    private void UpdateCheckedArchiveStatus()
+    {
+        if (!IsInitialized || CheckedArchiveEntriesText is null || DeleteSelectedUnlockedButton is null)
+        {
+            return;
+        }
+
+        CheckedArchiveEntriesText.Text = _checkedArchivePaths.Count == 0
+            ? "可勾选多个项目后一次删除。"
+            : $"已勾选 {_checkedArchivePaths.Count:N0} 个项目。";
+        DeleteSelectedUnlockedButton.IsEnabled = _checkedArchivePaths.Count > 0 && !_isBusy;
+    }
+
     private async void UnlockedFileTree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        if (FindVisualParent<CheckBox>(e.OriginalSource as DependencyObject) is not null)
+        {
+            return;
+        }
+
         if (_isBusy || _archiveSession is null || UnlockedFileTree.SelectedItem is not TreeViewItem { Tag: SecureArchiveEntry entry } ||
             entry.IsDirectory)
         {
+            return;
+        }
+
+        if (_archiveSession.IsExpired)
+        {
+            ShowNoticeForDeliveryRestriction(_archiveSession);
             return;
         }
 
@@ -1212,15 +1667,28 @@ public partial class MainWindow : Window
                                         StringComparison.OrdinalIgnoreCase))
                 .OrderBy(candidate => candidate.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToArray();
-            var externalMediaEntries = mediaEntries.Where(IsSupportedByExternalMediaViewer).ToArray();
+            var externalMediaEntries = _archiveSession.Entries
+                .Where(candidate => IsSupportedByExternalMediaViewer(candidate) &&
+                                    MediaPlayerSelection.ShouldIncludeInExternalCatalog(
+                                        candidate.MediaKind, _mediaPlayerPreferences) &&
+                                    IsArchiveEntryInFolderTree(candidate.RelativePath, parentPath))
+                .OrderBy(candidate => candidate.RelativePath, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
             // 管理员高安全窗口绝不能启动外部进程。即使外部查看器路径或
             // 启动逻辑以后发生变化，这里也始终回退到当前进程内的查看器。
-            if (!_allowElevatedMediaBrowsing && !_strictProtection.IsRunning &&
-                IsSupportedByExternalMediaViewer(entry))
+            if (IsSupportedByExternalMediaViewer(entry) &&
+                MediaPlayerSelection.ShouldUseExternalViewer(
+                    entry.MediaKind,
+                    _mediaPlayerPreferences,
+                    externalViewersBlocked: _allowElevatedMediaBrowsing || _strictProtection.IsRunning))
             {
                 var launch = await TryOpenWithExternalMediaViewerAsync(externalMediaEntries, entry);
                 if (launch.Started) return;
-                ShowExternalMediaViewerFailure(launch);
+                if (!string.Equals(launch.ProblemId, "viewer-not-found", StringComparison.Ordinal) ||
+                    MediaPlayerSelection.IsPreferredExternalAudioVideo(entry.MediaKind, _mediaPlayerPreferences))
+                {
+                    ShowExternalMediaViewerFailure(launch);
+                }
             }
             if (entry.MediaKind == SecureMediaKind.Pdf)
             {
@@ -1249,8 +1717,10 @@ public partial class MainWindow : Window
     private void UnlockedFileTree_ContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
         var selectedEntry = (UnlockedFileTree.SelectedItem as TreeViewItem)?.Tag as SecureArchiveEntry;
-        var canHandleEntry = selectedEntry is not null && !_allowElevatedMediaBrowsing;
+        var canHandleEntry = selectedEntry is not null && !_allowElevatedMediaBrowsing &&
+            _archiveSession?.CanExportPlaintext == true;
         var canDeleteEntry = canHandleEntry && _archiveSession is not null &&
+            !_archiveSession.IsDelivery &&
             !string.Equals(selectedEntry!.RelativePath, _archiveSession.RootName, StringComparison.OrdinalIgnoreCase);
         if (UnlockedFileTree.ContextMenu is null)
         {
@@ -1293,6 +1763,11 @@ public partial class MainWindow : Window
         }
         if (_archiveSession is null)
         {
+            return;
+        }
+        if (!_archiveSession.CanExportPlaintext)
+        {
+            ShowNoticeForDeliveryRestriction(_archiveSession);
             return;
         }
 
@@ -1369,7 +1844,38 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (string.Equals(entry.RelativePath, _archiveSession.RootName, StringComparison.OrdinalIgnoreCase))
+        await DeleteUnlockedEntriesAsync([entry.RelativePath]);
+    }
+
+    private async void DeleteSelectedUnlockedEntries_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_isBusy || _archiveSession is null || _checkedArchivePaths.Count == 0)
+        {
+            return;
+        }
+
+        await DeleteUnlockedEntriesAsync(_checkedArchivePaths.ToArray());
+    }
+
+    private async Task DeleteUnlockedEntriesAsync(IReadOnlyList<string> requestedPaths)
+    {
+        if (_archiveSession is null)
+        {
+            return;
+        }
+
+        var removals = NormalizeRemovalPaths(requestedPaths);
+        if (removals.Count == 0)
+        {
+            return;
+        }
+
+        if (removals.Any(path => string.Equals(path, _archiveSession.RootName, StringComparison.OrdinalIgnoreCase)))
         {
             MessageBox.Show(this, "加密文件最外层的根内容必须保留。请选择其中的文件或文件夹进行删除。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1377,14 +1883,15 @@ public partial class MainWindow : Window
         }
 
         var affectedEntries = _archiveSession.Entries
-            .Where(candidate => string.Equals(candidate.RelativePath, entry.RelativePath, StringComparison.OrdinalIgnoreCase) ||
-                                entry.IsDirectory && candidate.RelativePath.StartsWith(entry.RelativePath + "/", StringComparison.OrdinalIgnoreCase))
+            .Where(candidate => removals.Any(path =>
+                string.Equals(candidate.RelativePath, path, StringComparison.OrdinalIgnoreCase) ||
+                candidate.RelativePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         var fileCount = affectedEntries.Count(candidate => !candidate.IsDirectory);
         var totalBytes = affectedEntries.Where(candidate => !candidate.IsDirectory).Sum(candidate => candidate.Length);
-        var targetDescription = entry.IsDirectory
-            ? $"文件夹：{entry.RelativePath}\n包含：{fileCount:N0} 个文件，共 {FormatByteSize(totalBytes)}"
-            : $"文件：{entry.RelativePath}\n大小：{FormatByteSize(entry.Length)}";
+        var targetDescription = removals.Count == 1
+            ? $"项目：{removals[0]}\n包含：{fileCount:N0} 个文件，共 {FormatByteSize(totalBytes)}"
+            : $"已选择：{removals.Count:N0} 个项目\n实际包含：{fileCount:N0} 个文件，共 {FormatByteSize(totalBytes)}";
         var confirmation = MessageBox.Show(this,
             $"确定要从加密文件中永久删除以下内容吗？\n\n{targetDescription}\n\n删除后无法恢复。",
             "确认从加密文件中删除", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
@@ -1393,7 +1900,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        await UpdateUnlockedArchiveAsync([entry.RelativePath], []);
+        await UpdateUnlockedArchiveAsync(removals, []);
+    }
+
+    private static IReadOnlyList<string> NormalizeRemovalPaths(IEnumerable<string> paths)
+    {
+        var ordered = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path.Count(character => character == '/'))
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var result = new List<string>();
+        foreach (var path in ordered)
+        {
+            if (result.Any(parent => path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            result.Add(path);
+        }
+
+        return result;
     }
 
     private async void AppendFilesToUnlocked_Click(object sender, RoutedEventArgs e)
@@ -1422,9 +1951,9 @@ public partial class MainWindow : Window
         var sourcePaths = new List<string>();
         if (type == MessageBoxResult.Yes)
         {
-            var dialog = new OpenFileDialog { Title = "选择要追加的文件", Multiselect = true, CheckFileExists = true };
-            if (dialog.ShowDialog(this) != true) return;
-            sourcePaths.AddRange(dialog.FileNames.Distinct(StringComparer.OrdinalIgnoreCase));
+            var dialog = new AppendFilePickerDialog(Path.GetDirectoryName(_sourcePath)) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            sourcePaths.AddRange(dialog.SelectedFiles);
         }
         else
         {
@@ -1433,27 +1962,99 @@ public partial class MainWindow : Window
             sourcePaths.Add(dialog.FolderName);
         }
 
+        var sourceFiles = ExpandSourceFiles(sourcePaths);
+        var estimate = EstimateAppendSize(sourceFiles, CurrentCompression);
+        var estimateText = estimate.MinimumBytes == estimate.MaximumBytes
+            ? FormatByteSize(estimate.MinimumBytes)
+            : $"{FormatByteSize(estimate.MinimumBytes)}～{FormatByteSize(estimate.MaximumBytes)}";
+        if (MessageBox.Show(this,
+                $"准备追加 {sourceFiles.Count} 个文件，原始大小共 {FormatByteSize(estimate.SourceBytes)}。\n" +
+                $"按当前压缩方式，预计加密包增加约 {estimateText}。\n\n" +
+                "这是追加前估算；程序完成压缩后会显示准确报告。是否继续检查重复内容？",
+                "追加体积预估", MessageBoxButton.YesNo, MessageBoxImage.Information,
+                MessageBoxResult.Yes) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> duplicates;
+        try
+        {
+            SetBusy(true);
+            Mouse.OverrideCursor = Cursors.Wait;
+            duplicates = await FindDuplicateContentAsync(_archiveSession, sourceFiles, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            ShowFriendlyError("无法检查重复文件", exception);
+            return;
+        }
+        finally
+        {
+            Mouse.OverrideCursor = null;
+            SetBusy(false);
+        }
+
+        if (duplicates.Count > 0)
+        {
+            var shown = string.Join("\n", duplicates.Take(8).Select(item => "• " + item));
+            var remaining = duplicates.Count > 8 ? $"\n• 另外还有 {duplicates.Count - 8} 项" : string.Empty;
+            if (MessageBox.Show(this,
+                    $"发现内容完全相同的文件：\n\n{shown}{remaining}\n\n" +
+                    "这些文件不会自动删除或跳过。仍要继续追加吗？",
+                    "发现重复内容", MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+        }
+
         var existingPaths = _archiveSession.Entries.Select(entry => entry.RelativePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var removals = new List<string>();
+        var removals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var additions = new List<ArchiveAppendSource>();
+        var plannedAdditionIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var plannedAdditionSizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        ArchiveConflictChoice? repeatedConflictChoice = null;
         foreach (var sourcePath in sourcePaths)
         {
+            var incomingSize = GetSourceSize(sourcePath);
             var name = File.Exists(sourcePath) ? new FileInfo(sourcePath).Name : new DirectoryInfo(sourcePath).Name;
             var desiredPath = target.RelativePath + "/" + name;
             var existing = _archiveSession.Entries.FirstOrDefault(entry =>
                 string.Equals(entry.RelativePath, desiredPath, StringComparison.OrdinalIgnoreCase));
-            if (existing is not null || existingPaths.Contains(desiredPath))
+            var hasPlannedConflict = plannedAdditionIndexes.TryGetValue(desiredPath, out var plannedIndex);
+            if (existing is not null || hasPlannedConflict || existingPaths.Contains(desiredPath))
             {
-                var choice = ArchiveConflictDialog.Show(this, name, existing?.Length ?? 0, GetSourceSize(sourcePath));
+                var existingSize = hasPlannedConflict
+                    ? plannedAdditionSizes.GetValueOrDefault(desiredPath)
+                    : existing is null ? 0 : GetArchiveEntrySize(_archiveSession, existing);
+                var choice = repeatedConflictChoice ??
+                    ArchiveConflictDialog.Show(this, name, existingSize, incomingSize);
+                if (choice is ArchiveConflictChoice.KeepBothAll or ArchiveConflictChoice.ReplaceAll or ArchiveConflictChoice.SkipAll)
+                {
+                    repeatedConflictChoice = choice;
+                    choice = ToSingleConflictChoice(choice);
+                }
                 if (choice == ArchiveConflictChoice.Cancel)
                 {
                     return;
                 }
 
+                if (choice == ArchiveConflictChoice.Skip)
+                {
+                    continue;
+                }
+
                 if (choice == ArchiveConflictChoice.Replace)
                 {
                     if (existing is not null) removals.Add(existing.RelativePath);
+                    if (hasPlannedConflict)
+                    {
+                        additions[plannedIndex] = new ArchiveAppendSource(sourcePath, target.RelativePath, name);
+                        plannedAdditionSizes[desiredPath] = incomingSize;
+                        continue;
+                    }
                 }
                 else
                 {
@@ -1463,13 +2064,32 @@ public partial class MainWindow : Window
             }
 
             existingPaths.Add(desiredPath);
+            plannedAdditionIndexes[desiredPath] = additions.Count;
+            plannedAdditionSizes[desiredPath] = incomingSize;
             additions.Add(new ArchiveAppendSource(sourcePath, target.RelativePath, name));
         }
 
         if (additions.Count > 0)
         {
-            await UpdateUnlockedArchiveAsync(removals, additions);
+            await UpdateUnlockedArchiveAsync(removals.ToArray(), additions);
         }
+    }
+
+    private static ArchiveConflictChoice ToSingleConflictChoice(ArchiveConflictChoice choice) => choice switch
+    {
+        ArchiveConflictChoice.KeepBothAll => ArchiveConflictChoice.KeepBoth,
+        ArchiveConflictChoice.ReplaceAll => ArchiveConflictChoice.Replace,
+        ArchiveConflictChoice.SkipAll => ArchiveConflictChoice.Skip,
+        _ => choice,
+    };
+
+    private static long GetArchiveEntrySize(SecureArchiveSession session, SecureArchiveEntry entry)
+    {
+        if (!entry.IsDirectory) return entry.Length;
+        return session.Entries
+            .Where(candidate => !candidate.IsDirectory &&
+                                candidate.RelativePath.StartsWith(entry.RelativePath + "/", StringComparison.OrdinalIgnoreCase))
+            .Sum(candidate => candidate.Length);
     }
 
     private async Task UpdateUnlockedArchiveAsync(IReadOnlyList<string> removals, IReadOnlyList<ArchiveAppendSource> additions)
@@ -1512,18 +2132,17 @@ public partial class MainWindow : Window
         {
             SetBusy(true);
             _progressWindow.Show();
-            await _archiveService.RebuildArchiveAsync(_archiveSession, request, progress, _operationCancellation.Token);
+            var compressionTimer = Stopwatch.StartNew();
+            var reopenedSession = await _archiveService.RebuildAndOpenArchiveAsync(
+                _archiveSession, request, progress, _operationCancellation.Token);
+            compressionTimer.Stop();
             CloseProgressWindow();
             CloseArchiveSession();
-            using var reopenPassword = ReadPassword(ArchivePasswordInput);
-            await OpenArchiveForBrowsingAsync(reopenPassword);
-            if (_archiveSession is null)
-            {
-                return;
-            }
+            ShowUnlockedArchiveSession(reopenedSession);
+            OperationLog.Append(additions.Count > 0 ? "追加文件" : "删除文件", _sourcePath, "成功",
+                additions.Count > 0 ? $"追加 {additions.Count} 项" : $"删除 {removals.Count} 项");
             ArchiveSigningIdentityPasswordInput.Clear();
-            MessageBox.Show(this, "加密文件已更新，并已使用所选发送者身份重新签名。", AppName,
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            ShowCompressionReport(reopenedSession.SizeReport, compressionTimer.Elapsed, "加密文件已更新");
         }
         catch (OperationCanceledException)
         {
@@ -1563,6 +2182,137 @@ public partial class MainWindow : Window
         }
     }
 
+    private static IReadOnlyList<string> ExpandSourceFiles(IEnumerable<string> sourcePaths)
+    {
+        var result = new List<string>();
+        foreach (var path in sourcePaths)
+        {
+            if (File.Exists(path)) result.Add(Path.GetFullPath(path));
+            else if (Directory.Exists(path)) result.AddRange(Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories));
+        }
+        return result;
+    }
+
+    private static (long SourceBytes, long MinimumBytes, long MaximumBytes) EstimateAppendSize(
+        IReadOnlyList<string> files, ArchiveCompressionLevel compression)
+    {
+        var sourceBytes = files.Sum(file => new FileInfo(file).Length);
+        var blocks = files.Sum(file => Math.Max(1L, (new FileInfo(file).Length + 4L * 1024 * 1024 - 1) / (4L * 1024 * 1024)));
+        var overhead = checked(blocks * 16 + files.Count * 180L);
+        if (compression == ArchiveCompressionLevel.Store)
+        {
+            var exact = checked(sourceBytes + overhead);
+            return (sourceBytes, exact, exact);
+        }
+
+        long minimumData;
+        if (compression == ArchiveCompressionLevel.Standard)
+        {
+            var alreadyCompressed = files.Where(IsUsuallyCompressedFile).Sum(file => new FileInfo(file).Length);
+            var candidates = sourceBytes - alreadyCompressed;
+            minimumData = checked(alreadyCompressed + (long)(candidates * 0.35));
+        }
+        else
+        {
+            minimumData = (long)(sourceBytes * (compression == ArchiveCompressionLevel.Maximum ? 0.25 : 0.50));
+        }
+        return (sourceBytes, checked(minimumData + overhead), checked(sourceBytes + overhead));
+    }
+
+    private static bool IsUsuallyCompressedFile(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        return extension is
+            ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".heic" or ".heif" or ".avif" or
+            ".mp3" or ".m4a" or ".aac" or ".ogg" or ".opus" or ".flac" or ".wma" or
+            ".mp4" or ".m4v" or ".mkv" or ".mov" or ".avi" or ".webm" or ".wmv" or
+            ".zip" or ".7z" or ".rar" or ".gz" or ".bz2" or ".xz" or ".zst" or ".cab" or
+            ".pdf" or ".docx" or ".xlsx" or ".pptx" or ".apk";
+    }
+
+    private static async Task<IReadOnlyList<string>> FindDuplicateContentAsync(
+        SecureArchiveSession session, IReadOnlyList<string> sourceFiles, CancellationToken cancellationToken)
+    {
+        var matches = new List<string>();
+        var selectedHashes = new Dictionary<(long Length, string Hash), string>();
+        var archiveHashCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var archiveByLength = session.Entries.Where(entry => !entry.IsDirectory)
+            .GroupBy(entry => entry.Length).ToDictionary(group => group.Key, group => group.ToArray());
+
+        foreach (var sourcePath in sourceFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var length = new FileInfo(sourcePath).Length;
+            await using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var sourceHash = Convert.ToHexString(await SHA256.HashDataAsync(input, cancellationToken));
+            if (selectedHashes.TryGetValue((length, sourceHash), out var previous) &&
+                await FilesEqualAsync(sourcePath, previous, cancellationToken))
+            {
+                matches.Add($"{Path.GetFileName(sourcePath)} 与本次选择的 {Path.GetFileName(previous)} 相同");
+            }
+            else
+            {
+                selectedHashes[(length, sourceHash)] = sourcePath;
+            }
+
+            if (!archiveByLength.TryGetValue(length, out var candidates)) continue;
+            foreach (var candidate in candidates)
+            {
+                if (!archiveHashCache.TryGetValue(candidate.RelativePath, out var archiveHash))
+                {
+                    await using var archiveStream = session.OpenEntryReadStream(candidate.RelativePath);
+                    archiveHash = Convert.ToHexString(await SHA256.HashDataAsync(archiveStream, cancellationToken));
+                    archiveHashCache[candidate.RelativePath] = archiveHash;
+                }
+                if (string.Equals(sourceHash, archiveHash, StringComparison.Ordinal))
+                {
+                    await using var sourceConfirmation = new FileStream(sourcePath, FileMode.Open, FileAccess.Read,
+                        FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await using var archiveConfirmation = session.OpenEntryReadStream(candidate.RelativePath);
+                    if (await StreamsEqualAsync(sourceConfirmation, archiveConfirmation, cancellationToken))
+                    {
+                        matches.Add($"{Path.GetFileName(sourcePath)} 与包内 {candidate.RelativePath} 相同");
+                        break;
+                    }
+                }
+            }
+        }
+        return matches;
+    }
+
+    private static async Task<bool> FilesEqualAsync(string leftPath, string rightPath, CancellationToken cancellationToken)
+    {
+        await using var left = new FileStream(leftPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using var right = new FileStream(rightPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await StreamsEqualAsync(left, right, cancellationToken);
+    }
+
+    private static async Task<bool> StreamsEqualAsync(Stream left, Stream right, CancellationToken cancellationToken)
+    {
+        if (left.CanSeek && right.CanSeek && left.Length != right.Length) return false;
+        var leftBuffer = new byte[1024 * 1024];
+        var rightBuffer = new byte[leftBuffer.Length];
+        try
+        {
+            while (true)
+            {
+                var leftRead = await left.ReadAsync(leftBuffer, cancellationToken);
+                var rightRead = await right.ReadAsync(rightBuffer, cancellationToken);
+                if (leftRead != rightRead) return false;
+                if (leftRead == 0) return true;
+                if (!leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead))) return false;
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(leftBuffer);
+            CryptographicOperations.ZeroMemory(rightBuffer);
+        }
+    }
+
     private static string GetUniqueArchiveChildName(string parentPath, string name, IReadOnlySet<string> existingPaths)
     {
         var extension = Path.GetExtension(name);
@@ -1596,34 +2346,90 @@ public partial class MainWindow : Window
         {
             return;
         }
+        if (!_archiveSession.CanExportPlaintext)
+        {
+            ShowNoticeForDeliveryRestriction(_archiveSession);
+            return;
+        }
 
-        var dialog = new OpenFolderDialog { Title = "选择全部明文内容的导出位置", Multiselect = false };
-        if (dialog.ShowDialog(this) != true)
+        var exportWindow = new ExportArchiveWindow { Owner = this };
+        if (exportWindow.ShowDialog() != true)
         {
             return;
         }
 
-        if (MessageBox.Show(
-                this,
-                "程序会先完整验证所有加密内容，然后才会导出明文文件。是否继续？",
-                "确认导出全部明文",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning,
-                MessageBoxResult.No) != MessageBoxResult.Yes)
+        var exportAsEncryptedPackage = exportWindow.ExportAsEncryptedPackage;
+        string? packagePath = null;
+        string? plaintextDirectory = null;
+        if (exportAsEncryptedPackage)
+        {
+            var packageDialog = new SaveFileDialog
+            {
+                Title = "导出加密包",
+                Filter = "凝然加密包|*.nrenc",
+                DefaultExt = ".nrenc",
+                AddExtension = true,
+                OverwritePrompt = false,
+                FileName = Path.GetFileNameWithoutExtension(_archiveSession.ArchivePath) + ".nrenc",
+            };
+            if (packageDialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            packagePath = packageDialog.FileName;
+        }
+        else
+        {
+            var directoryDialog = new OpenFolderDialog { Title = "选择明文内容的导出位置", Multiselect = false };
+            if (directoryDialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            if (MessageBox.Show(
+                    this,
+                    "程序会先完整验证所有加密内容，然后才会导出明文文件。是否继续？",
+                    "确认导出明文",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            plaintextDirectory = directoryDialog.FolderName;
+        }
+
+        if (string.IsNullOrWhiteSpace(packagePath) && string.IsNullOrWhiteSpace(plaintextDirectory))
         {
             return;
         }
 
         _operationCancellation = new CancellationTokenSource();
-        _progressWindow = new ProgressWindow(isEncrypting: false) { Owner = this };
+        _progressWindow = new ProgressWindow(
+            isEncrypting: false,
+            operationTitle: exportAsEncryptedPackage ? "正在导出加密包" : null) { Owner = this };
         _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
         var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
         try
         {
             SetBusy(true);
             _progressWindow.Show();
+            if (exportAsEncryptedPackage)
+            {
+                var packageResult = await _archiveSession.ExportEncryptedArchiveAsync(
+                    packagePath!,
+                    progress,
+                    _operationCancellation.Token);
+                CloseProgressWindow();
+                MessageBox.Show(this, $"加密包已经导出到：\n\n{packageResult}\n\n未创建明文文件。", AppName,
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
             var result = await _archiveSession.ExportAllAsync(
-                dialog.FolderName,
+                plaintextDirectory!,
                 progress,
                 _operationCancellation.Token);
             CloseProgressWindow();
@@ -1633,13 +2439,15 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             CloseProgressWindow();
-            MessageBox.Show(this, "导出已取消，未完成的临时明文已经清理。", AppName,
+            MessageBox.Show(this, exportAsEncryptedPackage
+                    ? "导出已取消，未完成的加密包已经清理。"
+                    : "导出已取消，未完成的临时明文已经清理。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
         {
             CloseProgressWindow();
-            ShowFriendlyError("无法导出全部内容", exception);
+            ShowFriendlyError(exportAsEncryptedPackage ? "无法导出加密包" : "无法导出全部内容", exception);
         }
         finally
         {
@@ -1866,6 +2674,7 @@ public partial class MainWindow : Window
                 : _strictProtectionSettings.Enabled
                     ? "严格防护已记住，但本次监控尚未启动"
                     : "设置严格防护监控");
+        RefreshMediaPlayerSettingsButton();
     }
 
     private void CloseArchiveSession()
@@ -1877,6 +2686,8 @@ public partial class MainWindow : Window
         _activeExternalMediaViewers.Clear();
         var session = _archiveSession;
         _archiveSession = null;
+        _archiveSessionRegistration.Dispose();
+        _archiveSessionRegistration = default;
         _physicalOperationActive = false;
         session?.Dispose();
         if (IsInitialized && UnlockedArchivePanel is not null)
@@ -1890,6 +2701,14 @@ public partial class MainWindow : Window
     {
         var separator = relativePath.LastIndexOf('/');
         return separator < 0 ? null : relativePath[..separator];
+    }
+
+    private static bool IsArchiveEntryInFolderTree(string relativePath, string folderPath)
+    {
+        var parentPath = GetArchiveParentPath(relativePath) ?? string.Empty;
+        return string.IsNullOrEmpty(folderPath) ||
+               string.Equals(parentPath, folderPath, StringComparison.OrdinalIgnoreCase) ||
+               parentPath.StartsWith(folderPath + "/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetUnlockedFileIcon(SecureArchiveEntry entry) => entry.MediaKind switch
@@ -1912,8 +2731,10 @@ public partial class MainWindow : Window
         var playerPath = MediaPlaybackHost.FindExternalViewer();
         if (playerPath is null || _archiveSession is null)
         {
-            // 未安装播放器属于正常情况，调用处会自动打开内置播放器。
-            return new ExternalMediaViewerLaunchResult(false, "viewer-not-found", null);
+            return new ExternalMediaViewerLaunchResult(false, "viewer-not-found",
+                UiLanguage.IsEnglish
+                    ? "NingRan Player was not found in its secure installation location. Install it and try again."
+                    : "没有在安全安装位置找到凝然播放器，请安装后重试。");
         }
 
         var host = new MediaPlaybackHost(_archiveSession, mediaEntries, initialEntry);
@@ -1930,9 +2751,15 @@ public partial class MainWindow : Window
             await host.DisposeAsync();
             var (problemId, reason) = exception switch
             {
-                TimeoutException => ("secure-session-timeout", "查看器已启动，但五秒内没有完成内部安全连接。请确认安装的是最新版凝然媒体查看器。"),
-                FileNotFoundException => ("viewer-file-missing", "Windows 记录的媒体查看器文件已不存在或无法读取。请重新安装查看器。"),
-                _ => ($"viewer-start-{exception.GetType().Name}", $"查看器没有成功建立安全连接：{exception.Message}"),
+                TimeoutException => ("secure-session-timeout", UiLanguage.IsEnglish
+                    ? "The player started but did not complete its secure connection within five seconds. Make sure the latest NingRan Player is installed."
+                    : "播放器已启动，但五秒内没有完成内部安全连接。请确认安装的是最新版凝然播放器。"),
+                FileNotFoundException => ("viewer-file-missing", UiLanguage.IsEnglish
+                    ? "The player recorded by Windows no longer exists or cannot be read. Reinstall NingRan Player."
+                    : "Windows 记录的播放器文件已不存在或无法读取。请重新安装凝然播放器。"),
+                _ => ($"viewer-start-{exception.GetType().Name}", UiLanguage.IsEnglish
+                    ? $"The player could not establish its secure connection: {exception.Message}"
+                    : $"播放器没有成功建立安全连接：{exception.Message}"),
             };
             return new ExternalMediaViewerLaunchResult(false, problemId, reason);
         }
@@ -1949,6 +2776,23 @@ public partial class MainWindow : Window
         {
             _mediaViewerFailurePreferences = _mediaViewerFailurePreferences.Ignore(result.ProblemId);
         }
+    }
+
+    private void RefreshMediaPlayerSettingsButton()
+    {
+        if (_allowElevatedMediaBrowsing || MediaPlayerSettingsButton is null) return;
+
+        MediaPlayerSettingsButton.ToolTip = _strictProtection.IsRunning
+            ? UiLanguage.IsEnglish
+                ? "Strict Protection is on, so audio and video currently use the built-in player."
+                : "严格防护已开启，音频和视频当前使用内置播放器。"
+            : _mediaPlayerPreferences.AudioVideoPlayer == AudioVideoPlayerChoice.BuiltInPlayer
+                ? UiLanguage.IsEnglish
+                    ? "Audio and video currently use the built-in player."
+                    : "音频和视频当前使用内置播放器。"
+                : UiLanguage.IsEnglish
+                    ? "Audio and video currently use NingRan Player."
+                    : "音频和视频当前使用凝然播放器。";
     }
 
     private async Task ObserveExternalMediaViewerAsync(MediaPlaybackHost host, string fileName)
@@ -2039,8 +2883,7 @@ public partial class MainWindow : Window
     {
         var selectedPath = Path.GetFullPath(path);
         if (_allowElevatedMediaBrowsing &&
-            (!File.Exists(selectedPath) ||
-             !string.Equals(Path.GetExtension(selectedPath), ".nrenc", StringComparison.OrdinalIgnoreCase)))
+            (!File.Exists(selectedPath) || !NrArchiveService.IsSupportedArchiveFile(selectedPath)))
         {
             ShowHighSecurityViewingOnlyMessage();
             return;
@@ -2052,8 +2895,7 @@ public partial class MainWindow : Window
         _detectedArchiveInfo = new ArchiveInfo(EncryptionMode.Standard, false);
         DecryptPhysicalDeviceText.Text = string.Empty;
         ClearTrustedSenderSelection();
-        var isEncryptedArchive = File.Exists(selectedPath) &&
-            string.Equals(Path.GetExtension(selectedPath), ".nrenc", StringComparison.OrdinalIgnoreCase);
+        var isEncryptedArchive = File.Exists(selectedPath) && NrArchiveService.IsSupportedArchiveFile(selectedPath);
         SelectedPathText.Text = isEncryptedArchive
             ? Path.GetFileName(selectedPath)
             : selectedPath;
@@ -2201,9 +3043,20 @@ public partial class MainWindow : Window
         HighSecurityOpenButton.Visibility = !archiveUnlocked && !IsEncrypting && !_allowElevatedMediaBrowsing &&
             _detectedArchiveInfo.HasSenderSignature ? Visibility.Visible : Visibility.Collapsed;
         HighSecurityStatusText.Visibility = _allowElevatedMediaBrowsing ? Visibility.Visible : Visibility.Collapsed;
-        ArchiveEditingPanel.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
-        ExportAllUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
-        AppendFilesToUnlockedButton.Visibility = _allowElevatedMediaBrowsing ? Visibility.Collapsed : Visibility.Visible;
+        var delivery = _archiveSession?.IsDelivery == true;
+        ArchiveEditingPanel.Visibility = _allowElevatedMediaBrowsing || delivery ? Visibility.Collapsed : Visibility.Visible;
+        ExportAllUnlockedButton.Visibility = _allowElevatedMediaBrowsing ||
+            delivery && _archiveSession?.CanExportPlaintext != true ? Visibility.Collapsed : Visibility.Visible;
+        AppendFilesToUnlockedButton.Visibility = _allowElevatedMediaBrowsing || delivery ? Visibility.Collapsed : Visibility.Visible;
+        DeleteSelectedUnlockedButton.Visibility = delivery ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void ShowNoticeForDeliveryRestriction(SecureArchiveSession session)
+    {
+        var message = session.IsExpired
+            ? "此交付包已过期。你仍可查看交付信息和文件列表，但不能打开或导出文件。"
+            : "发送方已禁止导出明文文件。你仍可在凝然内安全查看支持的内容。";
+        MessageBox.Show(this, message, "安全交付", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void SettingsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -2261,7 +3114,7 @@ public partial class MainWindow : Window
     private void HighSecurityOpen_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy || string.IsNullOrWhiteSpace(_sourcePath) || !File.Exists(_sourcePath) ||
-            !string.Equals(Path.GetExtension(_sourcePath), ".nrenc", StringComparison.OrdinalIgnoreCase))
+            !NrArchiveService.IsSupportedArchiveFile(_sourcePath))
         {
             MessageBox.Show(this, "请先选择一个可打开的凝然加密文件。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -2482,9 +3335,9 @@ public partial class MainWindow : Window
         MainContent.IsEnabled = !busy;
     }
 
-    private static string GetUniqueArchivePath(string directory, string sourceName)
+    private static string GetUniqueArchivePath(string directory, string sourceName, string extension)
     {
-        var candidate = Path.Combine(directory, sourceName + ".nrenc");
+        var candidate = Path.Combine(directory, sourceName + extension);
         if (!File.Exists(candidate) && !Directory.Exists(candidate))
         {
             return candidate;
@@ -2492,7 +3345,7 @@ public partial class MainWindow : Window
 
         for (var index = 1; ; index++)
         {
-            candidate = Path.Combine(directory, $"{sourceName} ({index}).nrenc");
+            candidate = Path.Combine(directory, $"{sourceName} ({index}){extension}");
             if (!File.Exists(candidate) && !Directory.Exists(candidate))
             {
                 return candidate;
@@ -2554,6 +3407,40 @@ public partial class MainWindow : Window
     private void MaximizeButton_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void VaultButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
+        var entry = new VaultEntryWindow { Owner = this };
+        if (entry.ShowDialog() != true) return;
+
+        var window = new VaultWindow(
+            new NrVaultService(keyFileService: _keyFileService, physicalDeviceProvider: _physicalDeviceService),
+            _archiveService,
+            _keyFileService,
+            _physicalDeviceService,
+            entry.SelectedMode)
+        { Owner = this };
+        window.Show();
+    }
+
+    private void DeliveryButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_operationCancellation is not null)
+        {
+            MessageBox.Show(this, "请先等待当前操作结束，再创建安全交付包。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var wizard = new DeliveryWizardWindow { Owner = this };
+        wizard.ShowDialog();
+    }
 
     private async void ToggleMaximize()
     {

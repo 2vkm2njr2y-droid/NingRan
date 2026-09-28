@@ -17,6 +17,10 @@ public sealed class SecureArchiveSession : IDisposable
     private readonly PhysicalDeviceUnlock? _physicalUnlock;
     private readonly PhysicalDeviceMonitor? _physicalMonitor;
     private readonly Dictionary<string, IndexedPayloadContainer.IndexedPayloadEntry> _entries;
+    private readonly long _archiveOffset;
+    private readonly long _archiveLength;
+    private readonly CancellationTokenSource _sessionCancellation;
+    private Timer? _expirationTimer;
     private bool _disposed;
 
     internal SecureArchiveSession(
@@ -27,7 +31,14 @@ public sealed class SecureArchiveSession : IDisposable
         PhysicalDeviceUnlock? physicalUnlock,
         PhysicalDeviceMonitor? physicalMonitor,
         string verifiedSenderName,
-        string archivePath)
+        bool senderIsTrusted,
+        string archivePath,
+        long archiveOffset,
+        long archiveLength,
+        long incrementalBaseLength = 0,
+        long incrementalNextBlockIndex = 0,
+        long incrementalGeneration = 0,
+        long incrementalLastSegmentStart = -1)
     {
         _input = input;
         _header = header;
@@ -37,14 +48,26 @@ public sealed class SecureArchiveSession : IDisposable
         _physicalUnlock = physicalUnlock;
         _physicalMonitor = physicalMonitor;
         VerifiedSenderName = verifiedSenderName;
+        SenderIsTrusted = senderIsTrusted;
         ArchivePath = archivePath;
+        _archiveOffset = archiveOffset;
+        _archiveLength = archiveLength;
+        IncrementalBaseLength = incrementalBaseLength;
+        IncrementalNextBlockIndex = incrementalNextBlockIndex;
+        IncrementalGeneration = incrementalGeneration;
+        IncrementalLastSegmentStart = incrementalLastSegmentStart;
         _entries = payload.Entries.ToDictionary(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase);
         Entries = payload.Entries.Select(entry => new SecureArchiveEntry(
             entry.RelativePath,
             Path.GetFileName(entry.RelativePath),
             entry.Kind == PayloadEntryKind.Directory,
             entry.Length,
-            entry.MediaKind ?? NrMediaFiles.TryGetKind(entry.RelativePath))).ToArray();
+            entry.MediaKind ?? NrMediaFiles.TryGetKind(entry.RelativePath),
+            entry.LastWriteUtcTicks)).ToArray();
+        _sessionCancellation = physicalMonitor is null
+            ? new CancellationTokenSource()
+            : CancellationTokenSource.CreateLinkedTokenSource(physicalMonitor.Token);
+        ScheduleExpirationCheck();
     }
 
     public string RootName => _payload.RootName;
@@ -53,20 +76,36 @@ public sealed class SecureArchiveSession : IDisposable
     public string ArchivePath { get; }
     public bool IsOpen => !_disposed;
     public string VerifiedSenderName { get; }
+    public bool SenderIsTrusted { get; }
     public IReadOnlyList<SecureArchiveEntry> Entries { get; }
-    public CancellationToken CancellationToken => _physicalMonitor?.Token ?? CancellationToken.None;
+    public DeliveryPackageInfo? DeliveryInfo => _payload.DeliveryInfo;
+    public bool IsDelivery => DeliveryInfo is not null;
+    public bool IsExpired => DeliveryInfo?.IsExpiredAt(DateTimeOffset.UtcNow) == true;
+    public bool CanExportPlaintext => !IsExpired && (DeliveryInfo?.AllowExport ?? true);
+    public ArchiveSizeReport SizeReport => IndexedPayloadContainer.CreateSizeReport(_payload, _archiveLength);
+    public CancellationToken CancellationToken => _sessionCancellation.Token;
+    internal long ArchiveOffset => _archiveOffset;
+    internal long ArchiveLength => _archiveLength;
+    internal FileStream ArchiveFile => _input;
+    internal ArchiveHeader Header => _header;
+    internal byte[] DataKey => _dataKey ?? throw new ObjectDisposedException(nameof(SecureArchiveSession));
+    internal IndexedPayloadContainer.IndexedPayload Payload => _payload;
+    internal long IncrementalBaseLength { get; }
+    internal long IncrementalNextBlockIndex { get; }
+    internal long IncrementalGeneration { get; }
+    internal long IncrementalLastSegmentStart { get; }
 
     public Stream OpenEntryReadStream(string relativePath)
     {
+        EnsureContentAccessAllowed();
         var entry = GetFileEntry(relativePath);
-        ThrowIfDisposed();
         return new SecureArchiveReadStream(this, entry);
     }
 
     public async Task ExportEntryAsync(string relativePath, string outputPath, CancellationToken cancellationToken = default)
     {
+        EnsurePlaintextExportAllowed();
         var entry = GetFileEntry(relativePath);
-        ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         var finalPath = Path.GetFullPath(outputPath);
         if (File.Exists(finalPath) || Directory.Exists(finalPath))
@@ -117,7 +156,7 @@ public sealed class SecureArchiveSession : IDisposable
         IProgress<CryptoProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
+        EnsurePlaintextExportAllowed();
         var destination = Path.GetFullPath(destinationDirectory);
         Directory.CreateDirectory(destination);
         using var destinationLock = WindowsFileSystemSafety.LockDirectoryPath(destination);
@@ -131,7 +170,8 @@ public sealed class SecureArchiveSession : IDisposable
             _dataKey!,
             _payload,
             (completed, message) => progress?.Report(new CryptoProgress(CryptoStage.Verifying, completed, totalBlocks, message)),
-            token).ConfigureAwait(false);
+            token,
+            _archiveOffset).ConfigureAwait(false);
 
         var staging = SecureStagingArea.Create(destination);
         try
@@ -203,6 +243,95 @@ public sealed class SecureArchiveSession : IDisposable
     }
 
     /// <summary>
+    /// 将当前已打开的加密内容导出为可移动的普通 .nrenc 加密包，不会创建明文。
+    /// </summary>
+    public async Task<string> ExportEncryptedArchiveAsync(
+        string outputPath,
+        IProgress<CryptoProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+        var finalPath = Path.GetFullPath(outputPath);
+        if (!string.Equals(Path.GetExtension(finalPath), ".nrenc", StringComparison.OrdinalIgnoreCase))
+        {
+            finalPath += ".nrenc";
+        }
+
+        if (File.Exists(finalPath) || Directory.Exists(finalPath))
+        {
+            throw new NingRanException("导出位置已经有同名文件，请更换名称。");
+        }
+
+        var directory = Path.GetDirectoryName(finalPath)
+            ?? throw new NingRanException("导出位置不正确。");
+        Directory.CreateDirectory(directory);
+        using var directoryLock = WindowsFileSystemSafety.LockDirectoryPath(directory);
+        var temporaryPath = Path.Combine(directory, $".ningran-package-{Guid.NewGuid():N}.part");
+        FileStream? output = null;
+        byte[]? buffer = null;
+        try
+        {
+            output = WindowsFileSystemSafety.CreateNewTemporaryFile(temporaryPath);
+            // A photo archive reads from its NTFS hidden stream. Copy only the
+            // encrypted archive region so the exported file is always a normal .nrenc.
+            _input.Position = _archiveOffset;
+            var totalBytes = Math.Max(_archiveLength, 1);
+            var copiedBytes = 0L;
+            var remainingBytes = _archiveLength;
+            buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(IndexedPayloadContainer.BlockSize);
+            progress?.Report(new CryptoProgress(CryptoStage.Finalizing, 0, totalBytes, "正在导出加密包…"));
+            while (remainingBytes > 0)
+            {
+                var requested = (int)Math.Min(buffer.Length, remainingBytes);
+                var read = await _input.ReadAsync(buffer.AsMemory(0, requested), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new EndOfStreamException("加密内容读取不完整，无法导出加密包。");
+                }
+
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                copiedBytes = checked(copiedBytes + read);
+                remainingBytes -= read;
+                progress?.Report(new CryptoProgress(CryptoStage.Finalizing, copiedBytes, totalBytes, "正在导出加密包…"));
+            }
+
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            output.Flush(flushToDisk: true);
+            WindowsFileSystemSafety.RenameOpenFile(output.SafeFileHandle, temporaryPath, finalPath);
+            output.Dispose();
+            output = null;
+            return finalPath;
+        }
+        catch
+        {
+            if (output is not null)
+            {
+                try
+                {
+                    WindowsFileSystemSafety.DeleteOpenFile(output.SafeFileHandle, temporaryPath);
+                }
+                catch
+                {
+                    // 加密包临时文件会在下次启动时继续清理。
+                }
+            }
+
+            throw;
+        }
+        finally
+        {
+            if (buffer is not null)
+            {
+                CryptographicOperations.ZeroMemory(buffer);
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            output?.Dispose();
+        }
+    }
+
+    /// <summary>
     /// 导出文件树中的一个文件，或将选中的文件夹及其所有内容作为独立副本导出。
     /// </summary>
     public async Task<DecryptionResult> ExportSelectionAsync(
@@ -212,7 +341,7 @@ public sealed class SecureArchiveSession : IDisposable
         IProgress<CryptoProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
+        EnsurePlaintextExportAllowed();
         var selected = GetArchiveEntry(relativePath);
         var destination = Path.GetFullPath(destinationDirectory);
         Directory.CreateDirectory(destination);
@@ -234,7 +363,8 @@ public sealed class SecureArchiveSession : IDisposable
             _dataKey!,
             _payload,
             (completed, message) => progress?.Report(new CryptoProgress(CryptoStage.Verifying, completed, totalBlocks, message)),
-            token).ConfigureAwait(false);
+            token,
+            _archiveOffset).ConfigureAwait(false);
 
         var staging = SecureStagingArea.Create(destination);
         try
@@ -314,7 +444,7 @@ public sealed class SecureArchiveSession : IDisposable
         ChaCha20Poly1305 cipher,
         CancellationToken cancellationToken)
     {
-        ThrowIfDisposed();
+        EnsureContentAccessAllowed();
         if (blockOffset < 0 || blockOffset >= entry.Blocks.Count)
         {
             throw new ArgumentOutOfRangeException(nameof(blockOffset));
@@ -332,7 +462,8 @@ public sealed class SecureArchiveSession : IDisposable
             tag,
             plaintext,
             cipher,
-            linked.Token).ConfigureAwait(false);
+            linked.Token,
+            _archiveOffset).ConfigureAwait(false);
     }
 
     internal ChaCha20Poly1305 CreateCipher()
@@ -341,11 +472,13 @@ public sealed class SecureArchiveSession : IDisposable
         return new ChaCha20Poly1305(_dataKey!);
     }
 
-    internal async Task ValidateAsync(CancellationToken cancellationToken)
+    /// <summary>完整校验全部加密分段，不创建或导出明文。</summary>
+    public async Task ValidateAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
-        await IndexedPayloadContainer.ValidateAllAsync(_input, _header, _dataKey!, _payload, null, linked.Token)
+        await IndexedPayloadContainer.ValidateAllAsync(
+                _input, _header, _dataKey!, _payload, null, linked.Token, _archiveOffset)
             .ConfigureAwait(false);
     }
 
@@ -393,7 +526,7 @@ public sealed class SecureArchiveSession : IDisposable
         Stream output,
         CancellationToken cancellationToken)
     {
-        ThrowIfDisposed();
+        EnsureContentAccessAllowed();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
         await IndexedPayloadContainer.CopyEntryToStreamAsync(
             _input,
@@ -402,7 +535,8 @@ public sealed class SecureArchiveSession : IDisposable
             _payload,
             entry,
             output,
-            linked.Token).ConfigureAwait(false);
+            linked.Token,
+            _archiveOffset).ConfigureAwait(false);
     }
 
     private IndexedPayloadContainer.IndexedPayloadEntry GetFileEntry(string relativePath)
@@ -437,6 +571,10 @@ public sealed class SecureArchiveSession : IDisposable
         }
 
         _physicalUnlock?.Dispose();
+        _expirationTimer?.Dispose();
+        _expirationTimer = null;
+        _sessionCancellation.Cancel();
+        _sessionCancellation.Dispose();
         _input.Dispose();
         _payload.Dispose();
         if (_dataKey is not null)
@@ -451,6 +589,51 @@ public sealed class SecureArchiveSession : IDisposable
         CryptographicOperations.ZeroMemory(_header.HeaderHash);
     }
 
+    internal void EnsureContentAccessAllowed()
+    {
+        ThrowIfDisposed();
+        if (IsExpired)
+        {
+            throw new NingRanException("此交付包已过期。你仍可查看交付信息和文件列表，但不能打开或导出文件。");
+        }
+    }
+
+    private void ScheduleExpirationCheck()
+    {
+        if (DeliveryInfo?.ExpiresAtUtc is not { } expiresAt) return;
+        var remaining = expiresAt - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+        {
+            _sessionCancellation.Cancel();
+            return;
+        }
+
+        var due = remaining > TimeSpan.FromHours(12) ? TimeSpan.FromHours(12) : remaining;
+        _expirationTimer = new Timer(_ =>
+        {
+            if (_disposed) return;
+            var next = expiresAt - DateTimeOffset.UtcNow;
+            if (next <= TimeSpan.Zero)
+            {
+                try { _sessionCancellation.Cancel(); } catch (ObjectDisposedException) { }
+                return;
+            }
+
+            var nextDue = next > TimeSpan.FromHours(12) ? TimeSpan.FromHours(12) : next;
+            try { _expirationTimer?.Change(nextDue, Timeout.InfiniteTimeSpan); }
+            catch (ObjectDisposedException) { }
+        }, null, due, Timeout.InfiniteTimeSpan);
+    }
+
+    private void EnsurePlaintextExportAllowed()
+    {
+        EnsureContentAccessAllowed();
+        if (DeliveryInfo?.AllowExport == false)
+        {
+            throw new NingRanException("发送方已禁止从此安全交付包导出明文文件。你仍可在凝然内安全查看支持的内容。");
+        }
+    }
+
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }
 
@@ -459,7 +642,8 @@ public sealed record SecureArchiveEntry(
     string Name,
     bool IsDirectory,
     long Length,
-    SecureMediaKind? MediaKind);
+    SecureMediaKind? MediaKind,
+    long LastWriteUtcTicks = 0);
 
 internal sealed class SecureArchiveReadStream : Stream
 {
@@ -500,6 +684,7 @@ internal sealed class SecureArchiveReadStream : Stream
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        _session.EnsureContentAccessAllowed();
         if (buffer.IsEmpty || _position >= Length) return 0;
         var wanted = (int)Math.Min(buffer.Length, Length - _position);
         var copied = 0;

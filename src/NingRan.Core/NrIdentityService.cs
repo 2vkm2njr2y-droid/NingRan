@@ -70,6 +70,18 @@ public sealed class NrIdentityService
             .ToArray();
     }
 
+    /// <summary>检查安全交付包指定的公开身份是否属于本机现有身份，不会解锁私密身份。</summary>
+    public bool HasLocalIdentityFingerprint(string fingerprint)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprint) || fingerprint.Length != 64 ||
+            !fingerprint.All(Uri.IsHexDigit))
+        {
+            return false;
+        }
+
+        return FindLocalIdentityByFingerprint(fingerprint) is not null;
+    }
+
     public async Task<IdentityCreationResult> CreateAsync(
         string name,
         string password,

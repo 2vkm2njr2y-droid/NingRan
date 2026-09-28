@@ -7,8 +7,12 @@ namespace NingRan.Windows;
 internal enum ArchiveConflictChoice
 {
     Cancel,
+    Skip,
     KeepBoth,
     Replace,
+    SkipAll,
+    KeepBothAll,
+    ReplaceAll,
 }
 
 internal sealed class ArchiveConflictDialog : Window
@@ -16,7 +20,7 @@ internal sealed class ArchiveConflictDialog : Window
     private ArchiveConflictDialog(string name, long existingSize, long incomingSize)
     {
         Title = "发现同名内容";
-        Width = 430;
+        Width = 640;
         SizeToContent = SizeToContent.Height;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
@@ -32,16 +36,39 @@ internal sealed class ArchiveConflictDialog : Window
         });
         panel.Children.Add(new TextBlock
         {
-            Text = $"名称：{name}\n现有大小：{FormatSize(existingSize)}\n追加内容大小：{FormatSize(incomingSize)}",
+            Text = $"名称：{name}\n现有大小：{FormatSize(existingSize)}\n准备追加：{FormatSize(incomingSize)}\n" +
+                   (existingSize == incomingSize ? "两个项目大小相同，请仍按实际内容判断。" : "两个项目大小不同。"),
             Margin = new Thickness(0, 12, 0, 18),
             TextWrapping = TextWrapping.Wrap,
             Foreground = new SolidColorBrush(Color.FromRgb(75, 89, 84)),
         });
-        var buttons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
-        buttons.Children.Add(CreateButton("保留二者", ArchiveConflictChoice.KeepBoth, true));
-        buttons.Children.Add(CreateButton("替换", ArchiveConflictChoice.Replace, false));
-        buttons.Children.Add(CreateButton("取消", ArchiveConflictChoice.Cancel, false));
-        panel.Children.Add(buttons);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "只处理这一个冲突",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 7),
+        });
+        var singleButtons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        singleButtons.Children.Add(CreateButton("自动改名", ArchiveConflictChoice.KeepBoth, true));
+        singleButtons.Children.Add(CreateButton("替换", ArchiveConflictChoice.Replace, false));
+        singleButtons.Children.Add(CreateButton("跳过", ArchiveConflictChoice.Skip, false));
+        panel.Children.Add(singleButtons);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "这次剩余的同名内容都这样处理",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 16, 0, 7),
+        });
+        var allButtons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        allButtons.Children.Add(CreateButton("全部自动改名", ArchiveConflictChoice.KeepBothAll, false));
+        allButtons.Children.Add(CreateButton("全部替换", ArchiveConflictChoice.ReplaceAll, false));
+        allButtons.Children.Add(CreateButton("全部跳过", ArchiveConflictChoice.SkipAll, false));
+        panel.Children.Add(allButtons);
+
+        var cancelButtons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+        cancelButtons.Children.Add(CreateButton("取消整个追加操作", ArchiveConflictChoice.Cancel, false));
+        panel.Children.Add(cancelButtons);
         Content = panel;
     }
 

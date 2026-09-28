@@ -1,5 +1,6 @@
 using Microsoft.Win32.SafeHandles;
 using System.Text;
+using System.Windows.Media.Imaging;
 
 namespace NingRan.Core.Internal;
 
@@ -19,7 +20,8 @@ internal sealed record PayloadEntry(
     long LastWriteUtcTicks,
     WindowsFileIdentity Identity,
     SafeFileHandle? SourceHandle,
-    Func<CancellationToken, ValueTask<Stream>>? ContentFactory = null);
+    Func<CancellationToken, ValueTask<Stream>>? ContentFactory = null,
+    ArchiveCompressionLevel? CompressionOverride = null);
 
 internal sealed class PayloadManifest : IDisposable
 {
@@ -30,14 +32,21 @@ internal sealed class PayloadManifest : IDisposable
         string rootName,
         IReadOnlyList<PayloadEntry> entries,
         long totalFileBytes,
-        long paddingLength)
+        long paddingLength,
+        IReadOnlyList<string>? temporaryPaths = null,
+        IReadOnlyList<PayloadManifest>? childManifests = null)
     {
         IsDirectory = isDirectory;
         RootName = rootName;
         Entries = entries;
         TotalFileBytes = totalFileBytes;
         PaddingLength = paddingLength;
+        _temporaryPaths = temporaryPaths ?? [];
+        _childManifests = childManifests ?? [];
     }
+
+    private readonly IReadOnlyList<string> _temporaryPaths;
+    private readonly IReadOnlyList<PayloadManifest> _childManifests;
 
     public bool IsDirectory { get; }
 
@@ -51,9 +60,24 @@ internal sealed class PayloadManifest : IDisposable
 
     public void Dispose()
     {
+        if (_childManifests.Count > 0)
+        {
+            foreach (var child in _childManifests)
+            {
+                child.Dispose();
+            }
+
+            return;
+        }
+
         foreach (var entry in Entries)
         {
             entry.SourceHandle?.Dispose();
+        }
+
+        foreach (var path in _temporaryPaths)
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }
 
@@ -100,7 +124,8 @@ internal sealed class PayloadManifest : IDisposable
     public static PayloadManifest Build(
         string sourcePath,
         SizePaddingMode sizePadding,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool lossyMedia = false)
     {
         var fullPath = Path.GetFullPath(sourcePath);
         var isFile = File.Exists(fullPath);
@@ -113,6 +138,7 @@ internal sealed class PayloadManifest : IDisposable
         var rootName = PathSafety.ValidateNameSegment(
             isFile ? new FileInfo(fullPath).Name : new DirectoryInfo(fullPath).Name);
         var entries = new List<PayloadEntry>();
+        var temporaryPaths = new List<string>();
         long totalBytes = 0;
         long totalNameBytes = Encoding.UTF8.GetByteCount(rootName);
 
@@ -122,14 +148,16 @@ internal sealed class PayloadManifest : IDisposable
             {
                 var handle = WindowsFileSystemSafety.OpenInputFile(fullPath);
                 var length = RandomAccess.GetLength(handle);
-                entries.Add(new PayloadEntry(
+                entries.Add(CreateSourceFileEntry(
                     PayloadEntryKind.File,
                     fullPath,
                     rootName,
                     length,
                     File.GetLastWriteTimeUtc(handle).Ticks,
                     WindowsFileSystemSafety.GetIdentity(handle),
-                    handle));
+                    handle,
+                    lossyMedia,
+                    temporaryPaths));
                 totalBytes = length;
             }
             else
@@ -202,21 +230,23 @@ internal sealed class PayloadManifest : IDisposable
                             var handle = WindowsFileSystemSafety.OpenInputFile(childFile.FullName);
                             var length = RandomAccess.GetLength(handle);
                             totalBytes = checked(totalBytes + length);
-                            entries.Add(new PayloadEntry(
+                            entries.Add(CreateSourceFileEntry(
                                 PayloadEntryKind.File,
                                 childFile.FullName,
                                 relative,
                                 length,
                                 File.GetLastWriteTimeUtc(handle).Ticks,
                                 WindowsFileSystemSafety.GetIdentity(handle),
-                                handle));
+                                handle,
+                                lossyMedia,
+                                temporaryPaths));
                         }
                     }
                 }
             }
 
             var paddingLength = CalculatePaddingLength(isDirectory, rootName, entries, sizePadding);
-            return new PayloadManifest(isDirectory, rootName, entries, totalBytes, paddingLength);
+            return new PayloadManifest(isDirectory, rootName, entries, totalBytes, paddingLength, temporaryPaths);
         }
         catch
         {
@@ -225,7 +255,256 @@ internal sealed class PayloadManifest : IDisposable
                 entry.SourceHandle?.Dispose();
             }
 
+            foreach (var path in temporaryPaths)
+            {
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+            }
+
             throw;
+        }
+    }
+
+    /// <summary>
+    /// 从已解锁保险箱直接建立加密包目录。文件正文按需从保险箱读取，
+    /// 不经过临时磁盘，也不会在磁盘上生成明文副本。
+    /// </summary>
+    public static PayloadManifest BuildVault(
+        VaultSession session,
+        SizePaddingMode sizePadding,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        cancellationToken.ThrowIfCancellationRequested();
+        var rootName = PathSafety.ValidateNameSegment(session.Info.Name);
+        var sourceRoot = session.VaultPath;
+        var entries = new List<PayloadEntry>
+        {
+            new(
+                PayloadEntryKind.Directory,
+                sourceRoot,
+                rootName,
+                0,
+                session.Info.CreatedAt.UtcDateTime.Ticks,
+                default,
+                null),
+        };
+
+        foreach (var vaultEntry in session.Entries
+                     .OrderBy(entry => entry.IsDirectory ? 0 : 1)
+                     .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relativePath = PathSafety.NormalizeRelativePath($"{rootName}/{vaultEntry.RelativePath}");
+            var displayPath = $"{sourceRoot}::{vaultEntry.RelativePath}";
+            if (vaultEntry.IsDirectory)
+            {
+                entries.Add(new PayloadEntry(
+                    PayloadEntryKind.Directory,
+                    displayPath,
+                    relativePath,
+                    0,
+                    vaultEntry.LastWriteTimeUtc.Ticks,
+                    default,
+                    null));
+                continue;
+            }
+
+            var vaultPath = vaultEntry.RelativePath;
+            entries.Add(new PayloadEntry(
+                PayloadEntryKind.File,
+                displayPath,
+                relativePath,
+                vaultEntry.Length,
+                vaultEntry.LastWriteTimeUtc.Ticks,
+                default,
+                null,
+                _ => new ValueTask<Stream>(session.OpenReadStream(vaultPath))));
+        }
+
+        return Create(isDirectory: true, rootName, entries, sizePadding);
+    }
+
+    /// <summary>
+    /// 将多个顶层文件和文件夹放入同一个新根目录。各子清单继续持有已打开的源文件，
+    /// 因而从准备、加密到最终验证期间都能检测源内容被替换或改动。
+    /// </summary>
+    public static PayloadManifest BuildMany(
+        IReadOnlyList<string> sourcePaths,
+        string rootName,
+        SizePaddingMode sizePadding,
+        CancellationToken cancellationToken,
+        bool lossyMedia = false)
+    {
+        ArgumentNullException.ThrowIfNull(sourcePaths);
+        if (sourcePaths.Count == 0)
+        {
+            throw new NingRanException("请至少选择一个要交付的文件或文件夹。");
+        }
+
+        rootName = PathSafety.ValidateNameSegment(rootName);
+        var normalizedSources = sourcePaths
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (normalizedSources.Length != sourcePaths.Count)
+        {
+            throw new NingRanException("选择列表中包含重复项目，请移除重复项后再生成。");
+        }
+
+        for (var outer = 0; outer < normalizedSources.Length; outer++)
+        {
+            for (var inner = 0; inner < normalizedSources.Length; inner++)
+            {
+                if (outer == inner) continue;
+                var parent = normalizedSources[outer].TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                             Path.DirectorySeparatorChar;
+                if (normalizedSources[inner].StartsWith(parent, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new NingRanException($"“{normalizedSources[inner]}”已经包含在所选文件夹中，请不要重复选择。");
+                }
+            }
+        }
+
+        var children = new List<PayloadManifest>(normalizedSources.Length);
+        try
+        {
+            foreach (var source in normalizedSources)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                children.Add(Build(source, SizePaddingMode.None, cancellationToken, lossyMedia));
+            }
+
+            var duplicateTopName = children
+                .GroupBy(child => child.RootName, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateTopName is not null)
+            {
+                throw new NingRanException($"多个所选项目都叫“{duplicateTopName.Key}”，无法在同一交付包中区分，请先改名。");
+            }
+
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var entries = new List<PayloadEntry>
+            {
+                new(PayloadEntryKind.Directory, string.Empty, rootName, 0, nowTicks, default, null),
+            };
+            foreach (var child in children)
+            {
+                foreach (var entry in child.Entries)
+                {
+                    entries.Add(entry with
+                    {
+                        RelativePath = PathSafety.NormalizeRelativePath($"{rootName}/{entry.RelativePath}"),
+                    });
+                }
+            }
+
+            if (entries.Count > PayloadContainer.MaximumEntries)
+            {
+                throw new NingRanException("所选内容超过 2 万个文件和文件夹，为避免电脑卡顿已停止处理。");
+            }
+
+            var totalBytes = children.Sum(child => child.TotalFileBytes);
+            var paddingLength = CalculatePaddingLength(true, rootName, entries, sizePadding);
+            return new PayloadManifest(true, rootName, entries, totalBytes, paddingLength,
+                childManifests: children.ToArray());
+        }
+        catch
+        {
+            foreach (var child in children)
+            {
+                child.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    private static PayloadEntry CreateSourceFileEntry(
+        PayloadEntryKind kind,
+        string fullPath,
+        string relativePath,
+        long length,
+        long lastWriteUtcTicks,
+        WindowsFileIdentity identity,
+        SafeFileHandle handle,
+        bool lossyMedia,
+        ICollection<string> temporaryPaths)
+    {
+        if (!lossyMedia || NrMediaFiles.TryGetKind(relativePath) != SecureMediaKind.Image)
+        {
+            return new PayloadEntry(kind, fullPath, relativePath, length, lastWriteUtcTicks,
+                identity, handle);
+        }
+
+        var temporaryPath = CreateLossyImage(fullPath, length, temporaryPaths);
+        if (temporaryPath is null)
+        {
+            return new PayloadEntry(kind, fullPath, relativePath, length, lastWriteUtcTicks,
+                identity, handle,
+                CompressionOverride: ArchiveCompressionLevel.SmallestLossy);
+        }
+
+        var transformedLength = new FileInfo(temporaryPath).Length;
+        return new PayloadEntry(kind, fullPath, relativePath, transformedLength, lastWriteUtcTicks,
+            identity, handle,
+            _ => new ValueTask<Stream>(new FileStream(temporaryPath, FileMode.Open, FileAccess.Read,
+                FileShare.Read, 1024 * 1024, FileOptions.Asynchronous)),
+            CompressionOverride: ArchiveCompressionLevel.SmallestLossy);
+    }
+
+    private static string? CreateLossyImage(string sourcePath, long sourceLength, ICollection<string> temporaryPaths)
+    {
+        var extension = Path.GetExtension(sourcePath);
+        if (!string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string? directory = null;
+        string? outputPath = null;
+        try
+        {
+            using var input = File.Open(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            if (decoder.Frames.Count == 0) return null;
+            var frame = decoder.Frames[0];
+            if (frame.PixelWidth is <= 0 or > 20_000 || frame.PixelHeight is <= 0 or > 20_000) return null;
+
+            directory = Path.Combine(Path.GetTempPath(), ".ningran-lossy-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            outputPath = Path.Combine(directory, "media.jpg");
+            var encoder = new JpegBitmapEncoder { QualityLevel = 65 };
+            encoder.Frames.Add(frame);
+            using (var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                       1024 * 1024, FileOptions.WriteThrough))
+            {
+                encoder.Save(output);
+                output.Flush(flushToDisk: true);
+            }
+
+            if (new FileInfo(outputPath).Length >= sourceLength)
+            {
+                File.Delete(outputPath);
+                Directory.Delete(directory);
+                return null;
+            }
+
+            temporaryPaths.Add(outputPath);
+            temporaryPaths.Add(directory);
+            return outputPath;
+        }
+        catch
+        {
+            if (outputPath is not null)
+            {
+                try { if (File.Exists(outputPath)) File.Delete(outputPath); } catch { }
+            }
+            if (directory is not null)
+            {
+                try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: false); } catch { }
+            }
+            return null;
         }
     }
 

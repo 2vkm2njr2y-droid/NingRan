@@ -1,0 +1,43 @@
+<Window x:Class="NingRan.Windows.VaultMediaViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
+        Title="保险箱安全媒体查看" Width="920" Height="620" MinWidth="680" MinHeight="460"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="{StaticResource PageBrush}"
+        Loaded="Window_Loaded" Closing="Window_Closing">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,12">
+            <TextBlock x:Name="TitleText" Text="程序内部安全播放" FontSize="20" FontWeight="Bold" />
+            <TextBlock x:Name="FileNameText" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+        </StackPanel>
+        <Border Grid.Row="1" Background="#090B0A" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
+            <Grid>
+                <vlc:VideoView x:Name="MediaView" Loaded="MediaView_Loaded" />
+                <TextBlock x:Name="LoadingText" Text="正在从保险箱安全读取媒体…" Foreground="White"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="24" />
+            </Grid>
+        </Border>
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="PlayButton" Content="暂停" Click="Play_Click" MinWidth="72" Margin="0,0,10,0" />
+            <Slider x:Name="ProgressSlider" Grid.Column="1" Minimum="0" Maximum="1000" Value="0"
+                    PreviewMouseLeftButtonUp="ProgressSlider_PreviewMouseLeftButtonUp" Margin="0,0,12,0" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                <TextBlock x:Name="TimeText" Text="0:00 / 0:00" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <TextBlock x:Name="VolumeText" Text="音量" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <Slider x:Name="VolumeSlider" Width="80" Minimum="0" Maximum="100" Value="100" ValueChanged="VolumeSlider_ValueChanged" />
+            </StackPanel>
+            <Button x:Name="CloseButton" Grid.Column="3" Content="关闭" Click="Close_Click" />
+        </Grid>
+    </Grid>
+</Window>

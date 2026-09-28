@@ -4,6 +4,7 @@ namespace NingRan.Setup;
 
 public sealed class InstallerEngine
 {
+    private static readonly Version MinimumWinFspVersion = new(2, 2, 26215);
     public async Task<InstallState> InstallAsync(
         SetupOptions options,
         Stream payload,
@@ -59,6 +60,8 @@ public sealed class InstallerEngine
                 progress,
                 cancellationToken).ConfigureAwait(false);
             SetupPathSafety.HardenTemporaryInstallDirectory(staging);
+
+            await InstallBundledWinFspAsync(staging, progress, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
             copySetupExecutable(Path.Combine(staging, SetupProduct.UninstallerName));
@@ -193,6 +196,70 @@ public sealed class InstallerEngine
                 // 未能安全恢复时保留备份，避免丢失旧程序。
             }
         }
+    }
+
+    private static async Task InstallBundledWinFspAsync(
+        string staging,
+        IProgress<SetupProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var installer = Path.Combine(staging, "winfsp-installer.msi");
+        if (!File.Exists(installer)) return;
+
+        progress?.Report(new SetupProgress(78, "正在安装临时磁盘组件…"));
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "msiexec.exe",
+            Arguments = $"/i \"{installer}\" /qn /norestart",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("无法启动临时磁盘组件安装程序。");
+        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        if (process.ExitCode is not 0 and not 3010)
+        {
+            throw new InvalidOperationException($"临时磁盘组件安装失败（结果 {process.ExitCode}）。");
+        }
+
+        VerifyBundledWinFspInstalled();
+    }
+
+    private static void VerifyBundledWinFspInstalled()
+    {
+        var candidatePaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "WinFsp", "bin", "winfsp-x64.dll"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinFsp", "bin", "winfsp-x64.dll"),
+        };
+        var runtimePath = candidatePaths.FirstOrDefault(File.Exists);
+        if (runtimePath is null)
+        {
+            throw new InvalidOperationException("临时磁盘组件没有安装成功：安装后仍未找到运行文件。已停止本次安装，原有凝然程序会保留；请重新运行安装程序进行修复。");
+        }
+
+        var fileVersionInfo = FileVersionInfo.GetVersionInfo(runtimePath);
+        var rawVersion = fileVersionInfo.FileVersion;
+        if (!TryParseVersion(rawVersion, out var version))
+        {
+            rawVersion = fileVersionInfo.ProductVersion;
+            if (!TryParseVersion(rawVersion, out version))
+            {
+                throw new InvalidOperationException("临时磁盘组件已经安装，但版本无法确认。已停止本次安装，原有凝然程序会保留；请重新运行安装程序进行修复。");
+            }
+        }
+
+        if (version < MinimumWinFspVersion)
+        {
+            throw new InvalidOperationException($"临时磁盘组件版本过低（检测到 {version}，需要 {MinimumWinFspVersion} 或更高版本）。已停止本次安装，原有凝然程序会保留；请重新运行安装程序进行修复。");
+        }
+    }
+
+    private static bool TryParseVersion(string? rawVersion, out Version version)
+    {
+        version = new Version();
+        if (string.IsNullOrWhiteSpace(rawVersion)) return false;
+        var parts = rawVersion.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 3 || !parts.Take(3).All(part => int.TryParse(part, out _))) return false;
+        return Version.TryParse(string.Join('.', parts.Take(3)), out version!);
     }
 
     public InstallState PrepareUninstall(string installPath, bool deleteUserData)

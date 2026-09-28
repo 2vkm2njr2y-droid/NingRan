@@ -57,7 +57,7 @@ internal static class MediaViewerFailureNotice
         var dialog = new Window
         {
             Owner = owner,
-            Title = "凝然媒体查看器未启动",
+            Title = UiLanguage.IsEnglish ? "NingRan Player did not start" : "凝然播放器未启动",
             Width = 560,
             Height = 250,
             MinWidth = 480,
@@ -68,13 +68,15 @@ internal static class MediaViewerFailureNotice
         var ignore = false;
         var description = new TextBlock
         {
-            Text = $"将改用内嵌查看，不会导出普通文件。\n\n原因：{reason}\n\n选择“忽略此问题”后，出现同样原因时将不再弹窗。",
+            Text = UiLanguage.IsEnglish
+                ? $"The built-in viewer will be used instead. No plaintext file will be exported.\n\nReason: {reason}\n\nChoose Ignore this problem to stop showing this message for the same reason."
+                : $"将改用内置查看，不会导出普通文件。\n\n原因：{reason}\n\n选择“忽略此问题”后，出现同样原因时将不再弹窗。",
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(20, 18, 20, 8),
         };
-        var ignoreButton = new Button { Content = "忽略此问题", Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(0, 0, 8, 0) };
+        var ignoreButton = new Button { Content = UiLanguage.IsEnglish ? "Ignore this problem" : "忽略此问题", Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(0, 0, 8, 0) };
         ignoreButton.Click += (_, _) => { ignore = true; dialog.Close(); };
-        var continueButton = new Button { Content = "使用内嵌查看", IsDefault = true, Padding = new Thickness(14, 6, 14, 6) };
+        var continueButton = new Button { Content = UiLanguage.IsEnglish ? "Use built-in viewer" : "使用内置查看", IsDefault = true, Padding = new Thickness(14, 6, 14, 6) };
         continueButton.Click += (_, _) => dialog.Close();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(20, 8, 20, 18) };
         buttons.Children.Add(ignoreButton);
