@@ -532,6 +532,7 @@ internal static class Program
             Assert(session.CanExportPlaintext, "普通加密包的原有导出能力发生回归。");
         }
 
+        await VerifySplitArchiveIntegrityAsync(root);
         await VerifyDuplicateTopLevelNamesAreRejectedAsync(root);
         await VerifyNestedSelectionIsRejectedAsync(root, sourceA);
         await VerifyIncrementalArchiveUpdatesAsync(root);
@@ -543,6 +544,76 @@ internal static class Program
         {
             Assert(File.Exists(original.Key) && ComputeFileHash(original.Key).AsSpan().SequenceEqual(original.Value),
                 $"生成或失败处理改动了原始资料：{Path.GetFileName(original.Key)}");
+        }
+    }
+
+    private static async Task VerifySplitArchiveIntegrityAsync(string root)
+    {
+        var splitRoot = Path.Combine(root, "split-release-check");
+        Directory.CreateDirectory(splitRoot);
+        var requestedPath = Path.Combine(splitRoot, "正式分片.nrsplit");
+        var payloadLength = NrSplitArchiveService.MinimumPartSize + 4096;
+        var expectedHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[1024 * 1024];
+        await using (var writer = new SplitArchivePartWriter(requestedPath, NrSplitArchiveService.MinimumPartSize))
+        {
+            long written = 0;
+            while (written < payloadLength)
+            {
+                var count = (int)Math.Min(buffer.Length, payloadLength - written);
+                for (var index = 0; index < count; index++)
+                    buffer[index] = (byte)((written + index) % 251);
+                expectedHash.AppendData(buffer.AsSpan(0, count));
+                await writer.WriteAsync(buffer.AsMemory(0, count), CancellationToken.None);
+                written += count;
+            }
+            var paths = await writer.CompleteAsync(CancellationToken.None);
+            Assert(paths.Count == 2, $"100 MB 分片没有生成两个分片，实际为 {paths.Count} 个。");
+            Assert(new FileInfo(paths[0]).Length <= NrSplitArchiveService.MinimumPartSize &&
+                   new FileInfo(paths[1]).Length <= NrSplitArchiveService.MinimumPartSize,
+                "生成的分片超过了设置的最大大小。");
+        }
+
+        var expected = expectedHash.GetHashAndReset();
+        try
+        {
+            await using (var input = NrSplitArchiveService.OpenReadStream(Path.Combine(splitRoot, "正式分片-1.nrsplit")))
+            {
+                var actual = await SHA256.HashDataAsync(input);
+                Assert(input.Length == payloadLength, "分片读取流报告的总长度不正确。");
+                Assert(CryptographicOperations.FixedTimeEquals(actual, expected), "分片合并读取后的内容校验失败。");
+                CryptographicOperations.ZeroMemory(actual);
+            }
+
+            await ExpectNingRanFailureAsync(
+                () => Task.Run(() => NrSplitArchiveService.EnsureOutputAvailable(requestedPath)),
+                "目标分片已存在时没有在写入前拒绝覆盖。");
+
+            var secondPath = Path.Combine(splitRoot, "正式分片-2.nrsplit");
+            var backupPath = Path.Combine(splitRoot, "正式分片-2.backup");
+            File.Copy(secondPath, backupPath);
+            File.Delete(secondPath);
+            await ExpectNingRanFailureAsync(
+                () => Task.Run(() => NrSplitArchiveService.OpenReadStream(Path.Combine(splitRoot, "正式分片-1.nrsplit")).Dispose()),
+                "缺少中间分片时仍然允许打开分片组。");
+            File.Move(backupPath, secondPath);
+
+            await using (var tampered = new FileStream(secondPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                tampered.Position = NrSplitArchiveService.HeaderSize + 17;
+                var original = tampered.ReadByte();
+                tampered.Position--;
+                tampered.WriteByte((byte)(original ^ 0x5A));
+                tampered.Flush(flushToDisk: true);
+            }
+            await ExpectNingRanFailureAsync(
+                () => Task.Run(() => NrSplitArchiveService.OpenReadStream(Path.Combine(splitRoot, "正式分片-1.nrsplit")).Dispose()),
+                "分片内容被篡改后仍然允许打开分片组。");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(expected);
+            CryptographicOperations.ZeroMemory(buffer);
         }
     }
 

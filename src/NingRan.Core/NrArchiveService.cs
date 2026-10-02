@@ -194,6 +194,10 @@ public sealed class NrArchiveService
         var outputPath = isSplitArchive
             ? Path.ChangeExtension(Path.GetFullPath(request.OutputPath), NrSplitArchiveService.Extension)
             : JpegArchiveContainer.NormalizeOutputPath(request.OutputPath, hasCoverImage);
+        if (isSplitArchive)
+        {
+            NrSplitArchiveService.EnsureOutputAvailable(outputPath);
+        }
         var isPhotoArchive = !isSplitArchive && hasCoverImage && JpegArchiveContainer.IsPhotoArchivePath(outputPath);
         if (request.IsVaultExport && isPhotoArchive)
         {

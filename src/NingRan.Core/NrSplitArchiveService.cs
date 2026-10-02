@@ -34,6 +34,34 @@ public static class NrSplitArchiveService
         }
     }
 
+    /// <summary>在开始写入前检查实际的“基础名-编号.nrsplit”目标是否已存在。</summary>
+    public static void EnsureOutputAvailable(string outputPath)
+    {
+        var fullPath = Path.GetFullPath(outputPath);
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new NingRanException("分片保存位置不正确。");
+        var fileName = Path.GetFileName(fullPath);
+        if (!fileName.EndsWith(Extension, StringComparison.OrdinalIgnoreCase)) fileName += Extension;
+        var candidatePath = Path.Combine(directory, fileName);
+        var basePath = SplitPartName.TryParse(candidatePath, out var parsedBase, out _)
+            ? parsedBase
+            : Path.Combine(directory, Path.GetFileNameWithoutExtension(fileName));
+        var baseName = Path.GetFileName(basePath);
+        if (string.IsNullOrWhiteSpace(baseName)) throw new NingRanException("分片文件名不正确。");
+
+        var existing = Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, baseName + "-*" + Extension)
+                .Where(candidate => SplitPartName.TryParse(candidate, out var candidateBase, out _) &&
+                                    string.Equals(candidateBase, basePath, StringComparison.OrdinalIgnoreCase))
+                .Select(Path.GetFileName)
+                .FirstOrDefault()
+            : null;
+        if (existing is not null)
+        {
+            throw new NingRanException($"分片保存位置已经有同组文件：{existing}。请更换名称或先处理旧分片。");
+        }
+    }
+
     public static Stream OpenReadStream(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
