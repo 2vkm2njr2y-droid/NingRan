@@ -83,7 +83,7 @@
                         VerticalAlignment="Center" ToolTip="打开使用说明、隐私条件和免责声明" />
                 <Border Grid.Column="8" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
                         Margin="0,0,14,0" VerticalAlignment="Center">
-                        <TextBlock Text="9.0.1" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
+                        <TextBlock Text="10.0.1" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
                 </Border>
                 <StackPanel Grid.Column="9" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
                     <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="最小化" />

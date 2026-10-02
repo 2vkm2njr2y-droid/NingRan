@@ -26,7 +26,7 @@ public static class SetupProduct
     public static bool SupportsFileAssociations => true;
     public static bool HasUserData => true;
 #endif
-    public const string Version = "9.0.1";
+    public const string Version = "10.0.1";
     public const string StateFileName = "install-state.json";
     public const string PayloadManifestName = "payload-manifest.json";
 

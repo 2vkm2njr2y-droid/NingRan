@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>NingRan.DeliveryChecks</AssemblyName>
+    <Version>10.0.1</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\NingRan.Core\NingRan.Core.csproj" />

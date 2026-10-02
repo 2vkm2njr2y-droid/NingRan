@@ -14,10 +14,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>NingRanSetup</AssemblyName>
     <RootNamespace>NingRan.Setup.Windows</RootNamespace>
-    <Version>9.0.1</Version>
-    <AssemblyVersion>9.0.1.0</AssemblyVersion>
-    <FileVersion>9.0.1.0</FileVersion>
-    <InformationalVersion>9.0.1</InformationalVersion>
+    <Version>10.0.1</Version>
+    <AssemblyVersion>10.0.1.0</AssemblyVersion>
+    <FileVersion>10.0.1.0</FileVersion>
+    <InformationalVersion>10.0.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <!-- Keep single-file as a project property so NuGet's locked restore sees
          the ILLink tool dependency consistently instead of receiving it only
