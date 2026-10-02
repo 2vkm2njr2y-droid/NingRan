@@ -19,7 +19,8 @@ public sealed class CreateVaultRequest : IDisposable
         IReadOnlyList<string>? sourcePaths = null,
         VaultSizeProtection sizeProtection = VaultSizeProtection.HideExactSize,
         nint ownerWindowHandle = 0,
-        long? fixedCapacityBytes = null)
+        long? fixedCapacityBytes = null,
+        ProtectionPolicy? protectionPolicy = null)
     {
         VaultPath = vaultPath;
         Password = password;
@@ -30,6 +31,7 @@ public sealed class CreateVaultRequest : IDisposable
         SizeProtection = sizeProtection;
         OwnerWindowHandle = ownerWindowHandle;
         FixedCapacityBytes = fixedCapacityBytes;
+        ProtectionPolicy = protectionPolicy;
     }
 
     public string VaultPath { get; }
@@ -41,6 +43,7 @@ public sealed class CreateVaultRequest : IDisposable
     public VaultSizeProtection SizeProtection { get; }
     public nint OwnerWindowHandle { get; }
     public long? FixedCapacityBytes { get; }
+    public ProtectionPolicy? ProtectionPolicy { get; }
 
     public void Dispose() => Password.Dispose();
 }
@@ -81,7 +84,9 @@ public sealed class CreateDualVaultRequest : IDisposable
         nint ownerWindowHandle = 0,
         long? fixedCapacityBytes = null,
         long? dailyCapacityBytes = null,
-        long? hiddenCapacityBytes = null)
+        long? hiddenCapacityBytes = null,
+        ProtectionPolicy? dailyProtectionPolicy = null,
+        ProtectionPolicy? hiddenProtectionPolicy = null)
     {
         VaultPath = vaultPath;
         DailyPassword = dailyPassword;
@@ -95,6 +100,8 @@ public sealed class CreateDualVaultRequest : IDisposable
         FixedCapacityBytes = fixedCapacityBytes;
         DailyCapacityBytes = dailyCapacityBytes;
         HiddenCapacityBytes = hiddenCapacityBytes;
+        DailyProtectionPolicy = dailyProtectionPolicy;
+        HiddenProtectionPolicy = hiddenProtectionPolicy;
     }
 
     public string VaultPath { get; }
@@ -109,6 +116,8 @@ public sealed class CreateDualVaultRequest : IDisposable
     public long? FixedCapacityBytes { get; }
     public long? DailyCapacityBytes { get; }
     public long? HiddenCapacityBytes { get; }
+    public ProtectionPolicy? DailyProtectionPolicy { get; }
+    public ProtectionPolicy? HiddenProtectionPolicy { get; }
 
     public void Dispose()
     {

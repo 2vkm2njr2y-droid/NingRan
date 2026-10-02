@@ -4,7 +4,7 @@ using NingRan.Core.Internal;
 
 namespace NingRan.Core;
 
-public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
+public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider, IPhysicalDevicePresence
 {
     private static ReadOnlySpan<byte> TokenMagic => "NRDEV001"u8;
     private static readonly byte[] RegistryEntropy = "NINGRAN-PHYSICAL-DEVICES-V1"u8.ToArray();
@@ -27,6 +27,40 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
 
     public IReadOnlyList<PhysicalDeviceDescriptor> ListRegisteredDevices() =>
         ReadRegistry().OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase).ToArray();
+
+    public bool IsAnyForbiddenStorageConnected(
+        ReadOnlyMemory<byte> archiveSalt,
+        IReadOnlyList<byte[]> forbiddenLookupHashes)
+    {
+        if (archiveSalt.Length != 16 || forbiddenLookupHashes.Any(hash => hash.Length != 32))
+            throw new NingRanException("禁止插入名单记录不正确。 ");
+        if (forbiddenLookupHashes.Count == 0) return false;
+
+        foreach (var connected in RemovableStoragePhysicalDevice.Discover())
+        {
+            var token = TryReadValidToken(connected);
+            if (token is null) continue;
+            try
+            {
+                var device = new PhysicalDeviceDescriptor(
+                    PhysicalDeviceKind.RemovableStorage,
+                    token.RegistrationId,
+                    string.Empty,
+                    connected.Model,
+                    connected.CapacityBytes);
+                var lookup = PhysicalDevicePrivacy.ComputeLookupHash(device, archiveSalt.Span);
+                try
+                {
+                    if (forbiddenLookupHashes.Any(hash => CryptographicOperations.FixedTimeEquals(hash, lookup)))
+                        return true;
+                }
+                finally { CryptographicOperations.ZeroMemory(lookup); }
+            }
+            finally { token.Clear(); }
+        }
+
+        return false;
+    }
 
     public IReadOnlyList<PhysicalDeviceDescriptor> ListConnectedStorageDevices() =>
         RemovableStoragePhysicalDevice.Discover().Select(device =>
@@ -155,6 +189,11 @@ public sealed class NrPhysicalDeviceService : IPhysicalDeviceProvider
         Upsert(descriptor);
         return descriptor;
     }
+
+    public Task<WindowsHelloCredential> RegisterWindowsHelloAsync(
+        nint ownerWindowHandle,
+        CancellationToken cancellationToken = default) =>
+        _fido2.RegisterWindowsHelloAsync(ownerWindowHandle, cancellationToken);
 
     public void RenameDevice(string id, string newName)
     {

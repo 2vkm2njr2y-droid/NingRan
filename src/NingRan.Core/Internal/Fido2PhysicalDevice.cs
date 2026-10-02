@@ -9,6 +9,7 @@ internal sealed class Fido2PhysicalDevice
 {
     private const string RelyingPartyId = "ningran.local";
     private const uint CrossPlatform = 2;
+    private const uint Platform = 1;
     private const uint UserVerificationRequired = 1;
     private const byte AuthenticatorDataUserPresent = 0x01;
     private const byte AuthenticatorDataUserVerified = 0x04;
@@ -26,7 +27,9 @@ internal sealed class Fido2PhysicalDevice
     public async Task<PhysicalDeviceDescriptor> RegisterAsync(
         string name,
         nint ownerWindowHandle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowPlatform = false,
+        bool requirePrf = true)
     {
         EnsureAvailable(ownerWindowHandle);
         using var memory = new NativeMemoryScope();
@@ -68,11 +71,11 @@ internal sealed class Fido2PhysicalDevice
                     Json = memory.Bytes(clientJson),
                     HashAlgorithm = memory.String("SHA-256"),
                 };
-                var hmacEnabled = memory.Int32(1);
+                var hmacEnabled = requirePrf ? memory.Int32(1) : 0;
                 var extension = new WebAuthnExtension
                 {
-                    Identifier = memory.String("hmac-secret"),
-                    DataLength = sizeof(int),
+                    Identifier = requirePrf ? memory.String("hmac-secret") : 0,
+                    DataLength = requirePrf ? (uint)sizeof(int) : 0,
                     Data = hmacEnabled,
                 };
                 var cancellationId = GetCancellationId(memory);
@@ -80,16 +83,18 @@ internal sealed class Fido2PhysicalDevice
                 {
                     Version = 6,
                     TimeoutMilliseconds = 120_000,
-                    Extensions = new WebAuthnExtensions
-                    {
-                        Count = 1,
-                        Extensions = memory.Struct(extension),
-                    },
-                    AuthenticatorAttachment = CrossPlatform,
+                    Extensions = requirePrf
+                        ? new WebAuthnExtensions
+                        {
+                            Count = 1,
+                            Extensions = memory.Struct(extension),
+                        }
+                        : default,
+                    AuthenticatorAttachment = allowPlatform ? Platform : CrossPlatform,
                     UserVerificationRequirement = UserVerificationRequired,
                     AttestationConveyancePreference = AttestationNone,
                     CancellationId = cancellationId,
-                    EnablePrf = 1,
+                    EnablePrf = requirePrf ? 1 : 0,
                 };
 
                 nint attestationPointer = 0;
@@ -104,7 +109,8 @@ internal sealed class Fido2PhysicalDevice
                         ref clientData,
                         ref options,
                         out attestationPointer), CancellationToken.None).ConfigureAwait(false);
-                    ThrowForResult(result, cancellationToken, "无法在 FIDO2 安全密钥上创建凝然加密凭证");
+                    ThrowForResult(result, cancellationToken,
+                        allowPlatform ? "无法在 Windows Hello 上创建凝然加密凭证" : "无法在 FIDO2 安全密钥上创建凝然加密凭证");
                     if (attestationPointer == 0)
                     {
                         throw new NingRanException("FIDO2 安全密钥没有返回登记结果。 ");
@@ -115,14 +121,18 @@ internal sealed class Fido2PhysicalDevice
                         attestation.AuthenticatorDataLength,
                         attestation.AuthenticatorData,
                         "登记安全密钥");
-                    if (attestation.Version < 5 || attestation.PrfEnabled == 0 ||
-                        attestation.CredentialIdLength is 0 or > 2048 || attestation.CredentialId == 0)
+                    if (attestation.CredentialIdLength is 0 or > 2048 || attestation.CredentialId == 0 ||
+                        requirePrf && (attestation.Version < 5 || attestation.PrfEnabled == 0))
                     {
                         throw new NingRanException(
-                            "这把 FIDO2 安全密钥不支持离线加密所需的 HMAC-secret/PRF 功能，不能登记；程序不会改用较弱方式。 ");
+                            allowPlatform
+                                ? requirePrf
+                                    ? "当前 Windows Hello 不支持离线加密所需的 HMAC-secret/PRF 功能。"
+                                    : "当前 Windows Hello 没有返回可用的本机凭据。"
+                                : "这把 FIDO2 安全密钥不支持离线加密所需的 HMAC-secret/PRF 功能，不能登记；程序不会改用较弱方式。 ");
                     }
 
-                    EnsurePhysicalTransport(attestation.UsedTransport);
+                    EnsureTransport(attestation.UsedTransport, allowPlatform);
                     var credentialId = new byte[attestation.CredentialIdLength];
                     Marshal.Copy(attestation.CredentialId, credentialId, 0, credentialId.Length);
                     var id = Convert.ToHexString(SHA256.HashData(credentialId));
@@ -140,7 +150,9 @@ internal sealed class Fido2PhysicalDevice
                         var verified = await GetAssertionAsync(
                             [new PhysicalDeviceRequirement(descriptor, verificationSalt)],
                             ownerWindowHandle,
-                            cancellationToken).ConfigureAwait(false);
+                            cancellationToken,
+                            allowPlatform,
+                            requirePrf).ConfigureAwait(false);
                         CryptographicOperations.ZeroMemory(verified.Secret);
                     }
                     catch
@@ -175,6 +187,42 @@ internal sealed class Fido2PhysicalDevice
         }
     }
 
+    public async Task<WindowsHelloCredential> RegisterWindowsHelloAsync(
+        nint ownerWindowHandle,
+        CancellationToken cancellationToken)
+    {
+        PhysicalDeviceDescriptor descriptor;
+        try
+        {
+            descriptor = await RegisterAsync(
+                "Windows Hello",
+                ownerWindowHandle,
+                cancellationToken,
+                allowPlatform: true,
+                requirePrf: true).ConfigureAwait(false);
+        }
+        catch (NingRanException exception) when (
+            exception.Message.Contains("HMAC-secret/PRF", StringComparison.OrdinalIgnoreCase))
+        {
+            descriptor = await RegisterAsync(
+                "Windows Hello",
+                ownerWindowHandle,
+                cancellationToken,
+                allowPlatform: true,
+                requirePrf: false).ConfigureAwait(false);
+            var protectedSecret = CreateAccountBoundSecret(descriptor.CredentialId
+                ?? throw new NingRanException("Windows Hello 没有返回凭据。 "));
+            return new WindowsHelloCredential(
+                descriptor.CredentialId.ToArray(),
+                RandomNumberGenerator.GetBytes(32),
+                protectedSecret);
+        }
+
+        return new WindowsHelloCredential(
+            descriptor.CredentialId?.ToArray() ?? throw new NingRanException("Windows Hello 没有返回凭据。 "),
+            RandomNumberGenerator.GetBytes(32));
+    }
+
     public async Task<PhysicalDeviceUnlock> UnlockAnyAsync(
         IReadOnlyList<PhysicalDeviceRequirement> requirements,
         nint ownerWindowHandle,
@@ -202,10 +250,56 @@ internal sealed class Fido2PhysicalDevice
         return new PhysicalDeviceUnlock(requirement.Device, result.Secret, revalidate: Revalidate);
     }
 
+    public async Task<byte[]> UnlockWindowsHelloAsync(
+        WindowsHelloCredential credential,
+        nint ownerWindowHandle,
+        CancellationToken cancellationToken)
+    {
+        credential.Validate();
+        var descriptor = new PhysicalDeviceDescriptor(
+            PhysicalDeviceKind.Fido2SecurityKey,
+            Convert.ToHexString(SHA256.HashData(credential.CredentialId)),
+            "Windows Hello",
+            "本机账户",
+            0,
+            credential.CredentialId.ToArray());
+        var result = await GetAssertionAsync(
+            [new PhysicalDeviceRequirement(descriptor, credential.Salt.ToArray())],
+            ownerWindowHandle,
+            cancellationToken,
+            allowPlatform: true,
+            requirePrf: credential.ProtectedSecret is null).ConfigureAwait(false);
+        CryptographicOperations.ZeroMemory(result.Secret);
+        if (credential.ProtectedSecret is null)
+            throw new NingRanException("Windows Hello 没有返回离线加密所需的验证结果。 ");
+
+        try
+        {
+            var secret = ProtectedData.Unprotect(
+                credential.ProtectedSecret,
+                credential.CredentialId,
+                DataProtectionScope.CurrentUser);
+            if (secret.Length != KeyDerivation.KeySize)
+            {
+                CryptographicOperations.ZeroMemory(secret);
+                throw new NingRanException("Windows Hello 本机恢复资料长度不正确。 ");
+            }
+            return secret;
+        }
+        catch (CryptographicException exception)
+        {
+            throw new NingRanException(
+                "Windows Hello 已完成验证，但当前 Windows 账户无法打开本机恢复资料；请使用密码或密匙文件恢复。 ",
+                exception);
+        }
+    }
+
     private static async Task<(int Index, byte[] Secret)> GetAssertionAsync(
         IReadOnlyList<PhysicalDeviceRequirement> requirements,
         nint ownerWindowHandle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowPlatform = false,
+        bool requirePrf = true)
     {
         using var memory = new NativeMemoryScope();
         var nativeCredentials = new WebAuthnCredential[requirements.Count];
@@ -221,17 +315,20 @@ internal sealed class Fido2PhysicalDevice
                 Id = credentialPointer,
                 CredentialType = memory.String("public-key"),
             };
-            var salt = new WebAuthnHmacSecretSalt
+            if (requirePrf)
             {
-                FirstLength = 32,
-                First = memory.Bytes(requirements[index].SecretSalt),
-            };
-            nativeSaltMappings[index] = new WebAuthnCredentialWithHmacSecretSalt
-            {
-                CredentialIdLength = checked((uint)credential.Length),
-                CredentialId = credentialPointer,
-                Salt = memory.Struct(salt),
-            };
+                var salt = new WebAuthnHmacSecretSalt
+                {
+                    FirstLength = 32,
+                    First = memory.Bytes(requirements[index].SecretSalt),
+                };
+                nativeSaltMappings[index] = new WebAuthnCredentialWithHmacSecretSalt
+                {
+                    CredentialIdLength = checked((uint)credential.Length),
+                    CredentialId = credentialPointer,
+                    Salt = memory.Struct(salt),
+                };
+            }
         }
 
         var clientJson = CreateClientDataJson("webauthn.get");
@@ -244,11 +341,13 @@ internal sealed class Fido2PhysicalDevice
                 Json = memory.Bytes(clientJson),
                 HashAlgorithm = memory.String("SHA-256"),
             };
-            var saltValues = new WebAuthnHmacSecretSaltValues
-            {
-                CredentialCount = checked((uint)nativeSaltMappings.Length),
-                Credentials = memory.Array(nativeSaltMappings),
-            };
+            var saltValues = requirePrf
+                ? new WebAuthnHmacSecretSaltValues
+                {
+                    CredentialCount = checked((uint)nativeSaltMappings.Length),
+                    Credentials = memory.Array(nativeSaltMappings),
+                }
+                : default;
             var cancellationId = GetCancellationId(memory);
             var options = new WebAuthnGetAssertionOptions
             {
@@ -259,10 +358,10 @@ internal sealed class Fido2PhysicalDevice
                     Count = checked((uint)nativeCredentials.Length),
                     Credentials = memory.Array(nativeCredentials),
                 },
-                AuthenticatorAttachment = CrossPlatform,
+                AuthenticatorAttachment = allowPlatform ? Platform : CrossPlatform,
                 UserVerificationRequirement = UserVerificationRequired,
                 CancellationId = cancellationId,
-                HmacSecretSaltValues = memory.Struct(saltValues),
+                HmacSecretSaltValues = requirePrf ? memory.Struct(saltValues) : 0,
             };
 
             nint assertionPointer = 0;
@@ -275,7 +374,8 @@ internal sealed class Fido2PhysicalDevice
                     ref clientData,
                     ref options,
                     out assertionPointer), CancellationToken.None).ConfigureAwait(false);
-                ThrowForResult(result, cancellationToken, "FIDO2 安全密钥未能完成开锁");
+                ThrowForResult(result, cancellationToken,
+                    allowPlatform ? "Windows Hello 未能完成开锁" : "FIDO2 安全密钥未能完成开锁");
                 if (assertionPointer == 0)
                 {
                     throw new NingRanException("FIDO2 安全密钥没有返回开锁结果。 ");
@@ -286,12 +386,14 @@ internal sealed class Fido2PhysicalDevice
                     assertion.AuthenticatorDataLength,
                     assertion.AuthenticatorData,
                     "使用安全密钥开锁");
-                EnsurePhysicalTransport(assertion.UsedTransport);
+                EnsureTransport(assertion.UsedTransport, allowPlatform);
                 if (assertion.Credential.IdLength is 0 or > 2048 || assertion.Credential.Id == 0 ||
-                    assertion.HmacSecret == 0)
+                    requirePrf && assertion.HmacSecret == 0)
                 {
                     throw new NingRanException(
-                        "这把 FIDO2 安全密钥没有返回离线加密所需的 HMAC-secret/PRF 结果。 ");
+                        requirePrf
+                            ? "这把 FIDO2 安全密钥没有返回离线加密所需的 HMAC-secret/PRF 结果。 "
+                            : "Windows Hello 没有返回有效的本机凭据签名。 ");
                 }
 
                 var usedCredential = new byte[assertion.Credential.IdLength];
@@ -314,6 +416,9 @@ internal sealed class Fido2PhysicalDevice
                     {
                         throw new NingRanException("安全密钥返回了未经此文件授权的凭证。 ");
                     }
+
+                    if (!requirePrf)
+                        return (index, []);
 
                     var hmac = Marshal.PtrToStructure<WebAuthnHmacSecretSalt>(assertion.HmacSecret);
                     if (hmac.FirstLength != 32 || hmac.First == 0)
@@ -364,6 +469,29 @@ internal sealed class Fido2PhysicalDevice
         finally
         {
             CryptographicOperations.ZeroMemory(challenge);
+        }
+    }
+
+    private static byte[] CreateAccountBoundSecret(byte[] credentialId)
+    {
+        var secret = RandomNumberGenerator.GetBytes(KeyDerivation.KeySize);
+        try
+        {
+            return ProtectedData.Protect(
+                secret,
+                credentialId,
+                DataProtectionScope.CurrentUser);
+        }
+        catch (CryptographicException exception)
+        {
+            CryptographicOperations.ZeroMemory(secret);
+            throw new NingRanException(
+                "当前 Windows 账户无法保存 Windows Hello 的本机恢复资料，请使用支持 HMAC-secret/PRF 的 Windows Hello 配置。 ",
+                exception);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(secret);
         }
     }
 
@@ -451,8 +579,17 @@ internal sealed class Fido2PhysicalDevice
         }
     }
 
-    private static void EnsurePhysicalTransport(uint transport)
+    private static void EnsureTransport(uint transport, bool allowPlatform)
     {
+        if (allowPlatform)
+        {
+            if ((transport & TransportInternal) == 0 || (transport & TransportHybrid) != 0)
+            {
+                throw new NingRanException("当前凭据不是本机 Windows Hello，已拒绝使用。 ");
+            }
+            return;
+        }
+
         if ((transport & AllowedPhysicalTransports) == 0 ||
             (transport & (TransportInternal | TransportHybrid)) != 0)
         {

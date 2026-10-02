@@ -79,6 +79,7 @@
                             <ComboBoxItem Content="密码" />
                             <ComboBoxItem Content="密码＋密匙文件" />
                             <ComboBoxItem Content="密码＋物理设备" />
+                            <ComboBoxItem Content="密码＋Windows Hello" />
                         </ComboBox>
                         <Grid Margin="0,10,0,0">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -96,6 +97,10 @@
                             <TextBlock x:Name="PhysicalLabel" Text="授权物理设备（可多选）" Margin="0,0,0,5" />
                             <ListBox x:Name="PhysicalList" DisplayMemberPath="DisplayText" SelectionMode="Multiple" MinHeight="60" MaxHeight="120" />
                             <TextBlock x:Name="PhysicalHint" Text="创建时需要逐一出示所选设备；设备丢失后无法恢复。" Foreground="Firebrick" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0" />
+                        </StackPanel>
+                        <StackPanel x:Name="WindowsHelloPanel" Visibility="Collapsed" Margin="0,11,0,0">
+                            <Button x:Name="RegisterVaultHelloButton" Content="登记本机 Windows Hello" Click="RegisterVaultHello_Click" HorizontalAlignment="Left" />
+                            <TextBlock x:Name="WindowsHelloHint" Text="Windows Hello 只能在登记它的这台电脑、这个 Windows 账户上解锁；请保留密码作为恢复入口。" Foreground="Firebrick" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
                         </StackPanel>
                         <Grid Margin="0,12,0,0">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="150" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>

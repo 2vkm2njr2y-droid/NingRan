@@ -5,4 +5,5 @@ public enum EncryptionMode : byte
     Standard = 0,
     Advanced = 1,
     PhysicalDevice = 2,
+    Flexible = 3,
 }

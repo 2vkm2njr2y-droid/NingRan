@@ -187,6 +187,8 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="10" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <Border Background="#F5F9F7" CornerRadius="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10,8">
                                         <RadioButton x:Name="StandardRadio" GroupName="Mode" IsChecked="True" Checked="ModeChanged" Margin="0">
@@ -209,6 +211,14 @@
                                             <StackPanel>
                                                 <TextBlock Text="物理设备" FontWeight="SemiBold" />
                                                 <TextBlock Text="密码＋设备" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                                            </StackPanel>
+                                        </RadioButton>
+                                    </Border>
+                                    <Border Grid.Column="6" Background="#F5F9F7" CornerRadius="10" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10,8">
+                                        <RadioButton x:Name="FlexibleRadio" GroupName="Mode" Checked="ModeChanged" Margin="0">
+                                            <StackPanel>
+                                                <TextBlock Text="自定义组合" FontWeight="SemiBold" />
+                                                <TextBlock Text="密码、密匙、设备、Hello" FontSize="11" Foreground="{StaticResource MutedBrush}" />
                                             </StackPanel>
                                         </RadioButton>
                                     </Border>
@@ -261,6 +271,28 @@
                                                TextWrapping="Wrap" FontSize="11" Foreground="Firebrick" Margin="0,3,0,0" />
                                 </StackPanel>
 
+                                <Border x:Name="EncryptFlexiblePanel" Visibility="Collapsed" Margin="0,10,0,0"
+                                        Background="#F8FBF9" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                                    <StackPanel>
+                                        <TextBlock Text="自定义解锁条件（勾选的条件必须全部满足）" FontWeight="SemiBold" />
+                                        <WrapPanel Margin="0,8,0,0">
+                                            <CheckBox x:Name="FlexiblePasswordCheck" Content="密码" IsChecked="True" Margin="0,0,16,0" />
+                                            <CheckBox x:Name="FlexibleKeyFileCheck" Content="密匙文件" Margin="0,0,16,0" />
+                                            <CheckBox x:Name="FlexiblePhysicalCheck" Content="外接物理密匙" Checked="ModeChanged" Unchecked="ModeChanged" Margin="0,0,16,0" />
+                                            <CheckBox x:Name="FlexibleHelloCheck" Content="Windows Hello" />
+                                        </WrapPanel>
+                                        <TextBlock Text="物理密匙的新规则会在下一步界面设置必需名单、至少需要数量和禁止插入名单；当前版本要求使用可持续检测的移动存储密匙。" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,7,0,0" />
+                                        <TextBlock Text="组合中至少需要插入几把" Margin="0,8,0,3" />
+                                        <TextBox x:Name="FlexibleMinimumPhysicalInput" Text="1" Width="80" HorizontalAlignment="Left" />
+                                        <TextBlock Text="必须插入的密匙（从已选择密匙中指定）" Margin="0,8,0,3" />
+                                        <ListBox x:Name="FlexibleRequiredDeviceList" SelectionMode="Multiple" DisplayMemberPath="DisplayText" MaxHeight="70" />
+                                        <TextBlock Text="禁止插入的已登记移动存储（插入任意一把都会拒绝解锁）" Margin="0,8,0,3" />
+                                        <ListBox x:Name="FlexibleForbiddenDeviceList" SelectionMode="Multiple" DisplayMemberPath="DisplayText" MaxHeight="70" />
+                                        <Button x:Name="RegisterWindowsHelloButton" Content="登记本机 Windows Hello" Click="RegisterWindowsHello_Click" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                                        <TextBlock x:Name="WindowsHelloNoticeText" Text="Windows Hello 只能在登记的本机和当前 Windows 账户解锁；请保留密码或密匙文件作为恢复方式。" TextWrapping="Wrap" FontSize="11" Foreground="Firebrick" Margin="0,7,0,0" />
+                                    </StackPanel>
+                                </Border>
+
                                 <TextBlock Text="大小隐藏" FontWeight="SemiBold" Margin="0,10,0,6" />
                                 <ComboBox x:Name="SizePaddingCombo" SelectedIndex="0">
                                     <ComboBoxItem Content="不隐藏大小" />
@@ -288,6 +320,36 @@
                                            TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"
                                            Visibility="Collapsed" />
 
+                                <Border Margin="0,12,0,0" Padding="10" CornerRadius="8"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                        Background="#F5F9F7">
+                                    <StackPanel>
+                                        <CheckBox x:Name="SplitArchiveCheck" Content="分片加密（生成 .nrsplit 文件）"
+                                                  FontWeight="SemiBold" Checked="SplitArchiveChanged" Unchecked="SplitArchiveChanged" />
+                                        <TextBlock Text="大文件会边加密边写入多个分片；把所有分片放在同一目录，双击任意一个即可进入安全查看。"
+                                                   TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="10" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="每片最大大小" VerticalAlignment="Center" />
+                                            <ComboBox x:Name="SplitPartSizeCombo" Grid.Column="2" SelectedIndex="4">
+                                                <ComboBoxItem Content="100 MB" Tag="104857600" />
+                                                <ComboBoxItem Content="500 MB" Tag="524288000" />
+                                                <ComboBoxItem Content="1 GB" Tag="1073741824" />
+                                                <ComboBoxItem Content="2 GB" Tag="2147483648" />
+                                                <ComboBoxItem Content="4 GB（推荐）" Tag="4294967296" />
+                                                <ComboBoxItem Content="8 GB" Tag="8589934592" />
+                                                <ComboBoxItem Content="16 GB" Tag="17179869184" />
+                                                <ComboBoxItem Content="32 GB" Tag="34359738368" />
+                                                <ComboBoxItem Content="64 GB" Tag="68719476736" />
+                                            </ComboBox>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
                                 <TextBlock Text="照片封面" FontWeight="SemiBold" Margin="0,10,0,6" />
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -295,9 +357,9 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox x:Name="CoverImagePathInput" IsReadOnly="True" />
-                                    <Button Grid.Column="1" Content="选择照片" Click="PickCoverImage_Click" Margin="7,0,0,0" />
+                                    <Button x:Name="PickCoverImageButton" Grid.Column="1" Content="选择照片" Click="PickCoverImage_Click" Margin="7,0,0,0" />
                                 </Grid>
-                                <TextBlock x:Name="CoverDescriptionText" Text="保存到 NTFS 时会生成 .jpg，普通看图软件只显示封面；其他磁盘会自动生成 .nrenc，不需要照片。"
+                                    <TextBlock x:Name="CoverDescriptionText" Text="选择照片封面后，保存到 NTFS 时会生成 .jpg 并把正文放入隐藏数据流；不选择封面时默认生成 .nrenc 加密包。"
                                            TextWrapping="Wrap" FontSize="11"
                                            Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />
 

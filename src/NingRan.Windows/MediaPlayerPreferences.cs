@@ -10,6 +10,7 @@ internal enum AudioVideoPlayerChoice
 {
     NingRanPlayer,
     BuiltInPlayer,
+    DefaultProgram,
 }
 
 internal sealed class MediaPlayerPreferences
@@ -67,7 +68,7 @@ internal static class MediaPlayerSelection
         MediaPlayerPreferences preferences,
         bool externalViewersBlocked)
     {
-        if (externalViewersBlocked) return false;
+        if (externalViewersBlocked || ShouldUseDefaultProgram(preferences)) return false;
         return mediaKind switch
         {
             SecureMediaKind.Image or SecureMediaKind.Pdf => true,
@@ -77,12 +78,16 @@ internal static class MediaPlayerSelection
         };
     }
 
+    public static bool ShouldUseDefaultProgram(MediaPlayerPreferences preferences) =>
+        preferences.AudioVideoPlayer == AudioVideoPlayerChoice.DefaultProgram;
+
     public static bool ShouldIncludeInExternalCatalog(
         SecureMediaKind? mediaKind,
         MediaPlayerPreferences preferences) =>
-        mediaKind is SecureMediaKind.Image or SecureMediaKind.Pdf ||
+        !ShouldUseDefaultProgram(preferences) &&
+        (mediaKind is SecureMediaKind.Image or SecureMediaKind.Pdf ||
         mediaKind is SecureMediaKind.Audio or SecureMediaKind.Video &&
-        preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer;
+        preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer);
 
     public static bool IsPreferredExternalAudioVideo(
         SecureMediaKind? mediaKind,

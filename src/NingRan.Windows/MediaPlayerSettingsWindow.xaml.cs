@@ -11,6 +11,8 @@ public partial class MediaPlayerSettingsWindow : Window
             preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer;
         BuiltInPlayerRadio.IsChecked =
             preferences.AudioVideoPlayer == AudioVideoPlayerChoice.BuiltInPlayer;
+        DefaultProgramRadio.IsChecked =
+            preferences.AudioVideoPlayer == AudioVideoPlayerChoice.DefaultProgram;
         ExternalPlayerStatusText.Text = UiLanguage.IsEnglish
             ? externalPlayerAvailable
                 ? "NingRan Player was detected on this computer."
@@ -22,7 +24,9 @@ public partial class MediaPlayerSettingsWindow : Window
 
     internal AudioVideoPlayerChoice SelectedChoice => BuiltInPlayerRadio.IsChecked == true
         ? AudioVideoPlayerChoice.BuiltInPlayer
-        : AudioVideoPlayerChoice.NingRanPlayer;
+        : DefaultProgramRadio.IsChecked == true
+            ? AudioVideoPlayerChoice.DefaultProgram
+            : AudioVideoPlayerChoice.NingRanPlayer;
 
     private void SaveChoice_Click(object sender, RoutedEventArgs e) => DialogResult = true;
 }

@@ -18,6 +18,7 @@ public partial class VaultWindow : Window
     private readonly VaultWindowMode _windowMode;
     private readonly List<string> _sourcePaths = [];
     private readonly List<string> _hiddenSourcePaths = [];
+    private WindowsHelloCredential? _windowsHelloCredential;
     private VaultSession? _vaultSession;
     private VaultDriveMount? _vaultDrive;
     private VaultWorkspaceWindow? _workspaceWindow;
@@ -133,7 +134,7 @@ public partial class VaultWindow : Window
         ChooseOpenKeyButton.Content = "Choose";
         OpenButton.Content = "Mount and open";
         UpgradeCapacityLabel.Text = "Fixed capacity after upgrade";
-        if (ModeCombo.Items.Count == 3)
+        if (ModeCombo.Items.Count >= 3)
         {
             ((ComboBoxItem)ModeCombo.Items[0]).Content = "Password";
             ((ComboBoxItem)ModeCombo.Items[1]).Content = "Password + key file";
@@ -143,6 +144,10 @@ public partial class VaultWindow : Window
             ((ComboBoxItem)CapacityCombo.Items[4]).Content = "Custom";
             ((ComboBoxItem)UpgradeCapacityCombo.Items[4]).Content = "Custom";
         }
+        if (ModeCombo.Items.Count > 3)
+            ((ComboBoxItem)ModeCombo.Items[3]).Content = "Password + Windows Hello";
+        RegisterVaultHelloButton.Content = "Register this Windows Hello";
+        WindowsHelloHint.Text = "Windows Hello works only on this computer and Windows account. Keep the password as a recovery method.";
     }
 
     private void ApplyWindowMode()
@@ -307,15 +312,33 @@ public partial class VaultWindow : Window
         catch { PhysicalList.ItemsSource = Array.Empty<PhysicalDeviceDescriptor>(); }
     }
 
+    private async void RegisterVaultHello_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _windowsHelloCredential = await _physicalDeviceService.RegisterWindowsHelloAsync(
+                new System.Windows.Interop.WindowInteropHelper(this).Handle,
+                CancellationToken.None);
+            WindowsHelloHint.Text = IsEnglish
+                ? "Windows Hello is registered. Keep the password as a recovery method."
+                : "Windows Hello 已登记。请保留密码作为恢复入口。";
+        }
+        catch (Exception exception)
+        {
+            ShowError(IsEnglish ? "Windows Hello registration failed" : "Windows Hello 登记失败", exception);
+        }
+    }
+
     private void ModeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (KeyPanel is null) return;
-        if (CreateHiddenSpaceCheckBox?.IsChecked == true && ModeCombo.SelectedIndex == 2)
+        if (CreateHiddenSpaceCheckBox?.IsChecked == true && ModeCombo.SelectedIndex is 2 or 3)
         {
             ModeCombo.SelectedIndex = 0;
         }
         KeyPanel.Visibility = ModeCombo.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         PhysicalPanel.Visibility = ModeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        WindowsHelloPanel.Visibility = ModeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CreateHiddenSpace_Changed(object sender, RoutedEventArgs e)
@@ -326,7 +349,9 @@ public partial class VaultWindow : Window
         HiddenSourcesPanel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         if (ModeCombo.Items.Count > 2 && ModeCombo.Items[2] is ComboBoxItem physical)
             physical.IsEnabled = !enabled;
-        if (enabled && ModeCombo.SelectedIndex == 2) ModeCombo.SelectedIndex = 0;
+        if (ModeCombo.Items.Count > 3 && ModeCombo.Items[3] is ComboBoxItem hello)
+            hello.IsEnabled = !enabled;
+        if (enabled && ModeCombo.SelectedIndex is 2 or 3) ModeCombo.SelectedIndex = 0;
         if (enabled) SetRecommendedWorkspaceCapacities();
     }
 
@@ -483,6 +508,10 @@ public partial class VaultWindow : Window
         {
             ShowInfo(IsEnglish ? "Choose a valid key file." : "密码加密匙方式必须选择有效的密匙文件。", MessageBoxImage.Warning); return;
         }
+        if (ModeCombo.SelectedIndex == 3 && _windowsHelloCredential is null)
+        {
+            ShowInfo(IsEnglish ? "Register Windows Hello first." : "请先登记本机 Windows Hello。", MessageBoxImage.Warning); return;
+        }
         var devices = PhysicalList.SelectedItems.Cast<PhysicalDeviceDescriptor>().ToArray();
         if (ModeCombo.SelectedIndex == 2 && devices.Length == 0)
         {
@@ -535,8 +564,15 @@ public partial class VaultWindow : Window
             {
                 1 => EncryptionMode.Advanced,
                 2 => EncryptionMode.PhysicalDevice,
+                3 => EncryptionMode.Flexible,
                 _ => EncryptionMode.Standard,
             };
+            var dailyPolicy = dailyMode == EncryptionMode.Flexible
+                ? new ProtectionPolicy(
+                    ProtectionFactor.Password | ProtectionFactor.WindowsHello,
+                    windowsHello: _windowsHelloCredential,
+                    recoveryFactors: ProtectionFactor.Password)
+                : null;
             if (createHiddenSpace)
             {
                 using var request = new CreateDualVaultRequest(
@@ -551,7 +587,8 @@ public partial class VaultWindow : Window
                     new System.Windows.Interop.WindowInteropHelper(this).Handle,
                     fixedCapacity,
                     dailyCapacity,
-                    hiddenCapacity);
+                    hiddenCapacity,
+                    dailyProtectionPolicy: dailyPolicy);
                 await _vaultService.CreateDualAsync(request, progress, _operationCancellation.Token);
                 HiddenPasswordInput.Clear();
                 ConfirmHiddenPasswordInput.Clear();
@@ -567,7 +604,8 @@ public partial class VaultWindow : Window
                     _sourcePaths,
                     SizeProtectionCombo.SelectedIndex == 1 ? VaultSizeProtection.HideExactSize : VaultSizeProtection.SaveSpace,
                     new System.Windows.Interop.WindowInteropHelper(this).Handle,
-                    fixedCapacity);
+                    fixedCapacity,
+                    dailyPolicy);
                 await _vaultService.CreateAsync(request, progress, _operationCancellation.Token);
             }
             StatusText.Text = IsEnglish ? "Vault created. Unlocking…" : "保险箱已创建，正在打开…";

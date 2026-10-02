@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private ArchiveInfo _detectedArchiveInfo = new(EncryptionMode.Standard, false);
     private string? _sourcePath;
     private bool _isBusy;
+    private WindowsHelloCredential? _windowsHelloCredential;
     private bool _closeAfterCancellation;
     private bool _physicalOperationActive;
     private HwndSource? _windowSource;
@@ -47,8 +48,10 @@ public partial class MainWindow : Window
     private bool _strictStartupAttempted;
     private bool _closingAnimationActive;
     private bool _closingAnimationComplete;
+    private bool _closingCleanupInProgress;
     private readonly bool _allowElevatedMediaBrowsing;
     private readonly HashSet<MediaPlaybackHost> _activeExternalMediaViewers = [];
+    private readonly DefaultProgramOpenTracker _defaultProgramOpenTracker = new();
     private readonly HashSet<string> _checkedArchivePaths = new(StringComparer.OrdinalIgnoreCase);
     private MediaViewerFailurePreferences _mediaViewerFailurePreferences = new();
     private MediaPlayerPreferences _mediaPlayerPreferences = new();
@@ -120,14 +123,34 @@ public partial class MainWindow : Window
     private EncryptionMode CurrentMode => IsEncrypting
         ? (PhysicalRadio.IsChecked == true
             ? EncryptionMode.PhysicalDevice
-            : AdvancedRadio.IsChecked == true ? EncryptionMode.Advanced : EncryptionMode.Standard)
+            : AdvancedRadio.IsChecked == true ? EncryptionMode.Advanced
+            : FlexibleRadio.IsChecked == true ? EncryptionMode.Flexible : EncryptionMode.Standard)
         : _detectedArchiveMode;
+
+    private ProtectionPolicy? CurrentProtectionPolicy => CurrentMode == EncryptionMode.Flexible
+        ? new ProtectionPolicy(
+            (FlexiblePasswordCheck.IsChecked == true ? ProtectionFactor.Password : ProtectionFactor.None) |
+            (FlexibleKeyFileCheck.IsChecked == true ? ProtectionFactor.KeyFile : ProtectionFactor.None) |
+            (FlexiblePhysicalCheck.IsChecked == true ? ProtectionFactor.PhysicalDevice : ProtectionFactor.None) |
+            (FlexibleHelloCheck.IsChecked == true ? ProtectionFactor.WindowsHello : ProtectionFactor.None),
+            FlexiblePhysicalCheck.IsChecked == true
+                ? new PhysicalDevicePolicy(
+                    SelectedPhysicalDevices,
+                    int.TryParse(FlexibleMinimumPhysicalInput.Text, out var minimum) ? minimum : 0,
+                    requiredDeviceIds: FlexibleRequiredDeviceList.SelectedItems.Cast<PhysicalDeviceDescriptor>().Select(device => device.Id).ToArray(),
+                    forbiddenDevices: FlexibleForbiddenDeviceList.SelectedItems.Cast<PhysicalDeviceDescriptor>().ToArray())
+                : null,
+            FlexibleHelloCheck.IsChecked == true ? _windowsHelloCredential : null,
+            FlexibleHelloCheck.IsChecked == true && FlexiblePasswordCheck.IsChecked != true &&
+            EncryptPasswordInput.SecurePassword.Length > 0
+                ? ProtectionFactor.Password : ProtectionFactor.None)
+        : null;
 
     private IReadOnlyList<PhysicalDeviceDescriptor> SelectedPhysicalDevices =>
         EncryptPhysicalDeviceList.SelectedItems.Cast<PhysicalDeviceDescriptor>().ToArray();
 
     private string? CurrentKeyFilePath => IsEncrypting
-        ? (CurrentMode == EncryptionMode.Advanced ? EncryptKeyFilePathInput.Text : null)
+        ? (CurrentMode is EncryptionMode.Advanced or EncryptionMode.Flexible ? EncryptKeyFilePathInput.Text : null)
         : DecryptKeyFilePathInput.Text;
 
     private SizePaddingMode CurrentSizePadding => SizePaddingCombo.SelectedIndex switch
@@ -146,6 +169,23 @@ public partial class MainWindow : Window
         3 => ArchiveCompressionLevel.Maximum,
         _ => ArchiveCompressionLevel.Standard,
     };
+
+    private bool UseSplitArchive => IsEncrypting && SplitArchiveCheck.IsChecked == true;
+
+    private long CurrentSplitPartSize =>
+        (SplitPartSizeCombo.SelectedItem as ComboBoxItem)?.Tag is string tag && long.TryParse(tag, out var bytes)
+            ? bytes
+            : NrSplitArchiveService.DefaultPartSize;
+
+    private void SplitArchiveChanged(object sender, RoutedEventArgs e)
+    {
+        var enabled = SplitArchiveCheck.IsChecked == true;
+        CoverImagePathInput.IsEnabled = !enabled;
+        PickCoverImageButton.IsEnabled = !enabled;
+        CoverDescriptionText.Text = enabled
+            ? "分片包不使用照片封面；每个 .nrsplit 文件都带有完整性校验。"
+            : "选择照片封面后，保存到 NTFS 时会生成 .jpg 并把正文放入隐藏数据流；不选择封面时默认生成 .nrenc 加密包。";
+    }
 
     private void CompressionCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -260,8 +300,8 @@ public partial class MainWindow : Window
         {
             Title = _allowElevatedMediaBrowsing ? "选择需要高安全查看的凝然加密文件" : "选择需要加密或解密的文件",
             Filter = _allowElevatedMediaBrowsing
-                ? "凝然加密照片或旧版文件|*.jpg;*.jpeg;*.nrenc"
-                : "所有文件|*.*|凝然加密照片或旧版文件|*.jpg;*.jpeg;*.nrenc",
+                ? "凝然加密照片、分片或旧版文件|*.jpg;*.jpeg;*.nrenc;*.nrsplit"
+                : "所有文件|*.*|凝然加密照片、分片或旧版文件|*.jpg;*.jpeg;*.nrenc;*.nrsplit",
             CheckFileExists = true,
         };
         if (dialog.ShowDialog(this) == true)
@@ -320,6 +360,15 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        if (CurrentMode == EncryptionMode.Flexible)
+        {
+            try { CurrentProtectionPolicy?.ValidateForCreation(); }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
         using var signingPasswordCheck = SignIdentityCheck.IsChecked == true
             ? ReadPassword(SigningIdentityPasswordInput)
             : null;
@@ -330,13 +379,16 @@ public partial class MainWindow : Window
         }
         using (var passwordCheck = ReadPassword(EncryptPasswordInput))
         {
-            if (passwordCheck.IsEmpty)
+            if (passwordCheck.IsEmpty && (CurrentMode != EncryptionMode.Flexible || FlexiblePasswordCheck.IsChecked == true))
             {
                 MessageBox.Show(this, "请先填写加密密码。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            try { PasswordRules.ValidateForCreation(passwordCheck); }
-            catch (ArgumentException exception) { MessageBox.Show(this, exception.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            if (!passwordCheck.IsEmpty)
+            {
+                try { PasswordRules.ValidateForCreation(passwordCheck); }
+                catch (ArgumentException exception) { MessageBox.Show(this, exception.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            }
         }
 
         try { Directory.CreateDirectory(destination); }
@@ -364,7 +416,8 @@ public partial class MainWindow : Window
                     using var request = new EncryptRequest(path, output, password, CurrentMode, CurrentKeyFilePath,
                         CurrentSizePadding, CurrentCompression, SignIdentityCheck.IsChecked == true ? SelectedSigningIdentity?.Id : null,
                         signingPassword, CurrentMode == EncryptionMode.PhysicalDevice ? SelectedPhysicalDevices : null,
-                        new WindowInteropHelper(this).Handle);
+                        new WindowInteropHelper(this).Handle,
+                        ProtectionPolicy: CurrentProtectionPolicy);
                     await _archiveService.EncryptAsync(request, progress, _operationCancellation.Token);
                     succeeded++;
                     OperationLog.Append("批量加密", output, "成功");
@@ -402,6 +455,24 @@ public partial class MainWindow : Window
 
     private void PickEncryptKeyFile_Click(object sender, RoutedEventArgs e) =>
         PickKeyFile(EncryptKeyFilePathInput);
+
+    private async void RegisterWindowsHello_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var credential = await _physicalDeviceService.RegisterWindowsHelloAsync(
+                new WindowInteropHelper(this).Handle,
+                CancellationToken.None);
+            _windowsHelloCredential = credential;
+            FlexibleHelloCheck.IsChecked = true;
+            WindowsHelloNoticeText.Text = "Windows Hello 已登记。它只能在当前电脑和当前 Windows 账户解锁；请务必保留密码或密匙文件。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, $"Windows Hello 登记失败：\n\n{exception.Message}", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     private void PickCoverImage_Click(object sender, RoutedEventArgs e)
     {
@@ -1017,12 +1088,14 @@ public partial class MainWindow : Window
                 ? Path.GetDirectoryName(_sourcePath)!
                 : DestinationInput.Text)
             : string.Empty;
-        var usesPhotoArchive = IsEncrypting && NrArchiveService.SupportsPhotoArchiveOutput(destination);
+        var hasSelectedCover = IsEncrypting &&
+                               !string.IsNullOrWhiteSpace(CoverImagePathInput.Text);
+        var usesPhotoArchive = hasSelectedCover && !UseSplitArchive &&
+                               NrArchiveService.SupportsPhotoArchiveOutput(destination);
 
-        if (usesPhotoArchive &&
-            (string.IsNullOrWhiteSpace(CoverImagePathInput.Text) || !File.Exists(CoverImagePathInput.Text)))
+        if (usesPhotoArchive && !File.Exists(CoverImagePathInput.Text))
         {
-            MessageBox.Show(this, "请先选择一张存在的照片作为封面。", AppName,
+            MessageBox.Show(this, "所选照片已不存在，请重新选择封面。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -1036,7 +1109,10 @@ public partial class MainWindow : Window
         using var signingPassword = IsEncrypting && SignIdentityCheck.IsChecked == true
             ? ReadPassword(SigningIdentityPasswordInput)
             : null;
-        if (operationPassword.IsEmpty)
+        if (operationPassword.IsEmpty &&
+            (IsEncrypting
+                ? CurrentMode != EncryptionMode.Flexible || FlexiblePasswordCheck.IsChecked == true
+                : CurrentMode != EncryptionMode.Flexible))
         {
             MessageBox.Show(this, "请输入密码。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
@@ -1044,9 +1120,19 @@ public partial class MainWindow : Window
 
         if (IsEncrypting)
         {
+            if (CurrentMode == EncryptionMode.Flexible &&
+                FlexiblePasswordCheck.IsChecked != true &&
+                FlexibleKeyFileCheck.IsChecked != true &&
+                FlexiblePhysicalCheck.IsChecked != true &&
+                FlexibleHelloCheck.IsChecked != true)
+            {
+                MessageBox.Show(this, "请至少选择一种组合解锁条件。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             try
             {
-                PasswordRules.ValidateForCreation(operationPassword);
+                if (!operationPassword.IsEmpty || CurrentMode != EncryptionMode.Flexible)
+                    PasswordRules.ValidateForCreation(operationPassword);
             }
             catch (ArgumentException exception)
             {
@@ -1060,13 +1146,14 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (!ConfirmWeakPassword(operationPassword, "加密密码"))
+            if (!operationPassword.IsEmpty && !ConfirmWeakPassword(operationPassword, "加密密码"))
             {
                 return;
             }
         }
 
-        if (CurrentMode == EncryptionMode.Advanced &&
+        if (CurrentMode is EncryptionMode.Advanced or EncryptionMode.Flexible &&
+            (CurrentMode == EncryptionMode.Advanced || FlexibleKeyFileCheck.IsChecked == true) &&
             (string.IsNullOrWhiteSpace(CurrentKeyFilePath) || !File.Exists(CurrentKeyFilePath)))
         {
             MessageBox.Show(this, "高级模式必须选择加密时使用的有效密钥文件。", AppName,
@@ -1079,6 +1166,15 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "物理设备模式必须至少选择一个已登记设备。请先点击“管理设备”完成登记。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
+        }
+        if (IsEncrypting && CurrentMode == EncryptionMode.Flexible)
+        {
+            try { CurrentProtectionPolicy?.ValidateForCreation(); }
+            catch (Exception exception)
+            {
+                MessageBox.Show(this, exception.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
         }
 
         if (IsEncrypting && SignIdentityCheck.IsChecked == true)
@@ -1194,7 +1290,7 @@ public partial class MainWindow : Window
                 var output = GetUniqueArchivePath(
                     destination,
                     Path.GetFileName(_sourcePath),
-                    usesPhotoArchive ? ".jpg" : ".nrenc");
+                    UseSplitArchive ? ".nrsplit" : usesPhotoArchive ? ".jpg" : ".nrenc");
                 EncryptionResult result;
                 var compressionTimer = Stopwatch.StartNew();
                 using (var request = new EncryptRequest(
@@ -1209,7 +1305,11 @@ public partial class MainWindow : Window
                         SignIdentityCheck.IsChecked == true ? signingPassword : null,
                         CurrentMode == EncryptionMode.PhysicalDevice ? SelectedPhysicalDevices : null,
                         new WindowInteropHelper(this).Handle,
-                        preparedCover?.Path))
+                        preparedCover?.Path,
+                        CurrentProtectionPolicy)
+                {
+                    SplitPartSizeBytes = UseSplitArchive ? CurrentSplitPartSize : null,
+                })
                 {
                     result = await _archiveService.EncryptAsync(
                         request,
@@ -1221,6 +1321,14 @@ public partial class MainWindow : Window
                 compressionTimer.Stop();
                 ShowCompressionReport(result.SizeReport, compressionTimer.Elapsed, "加密完成");
                 OperationLog.Append("加密", result.ArchivePath, "成功");
+                if (UseSplitArchive)
+                {
+                    MessageBox.Show(this,
+                        "分片加密已完成并通过验证。所有 .nrsplit 分片都已生成，请保持它们在同一目录。分片安全查看目前为只读，追加、删除和更新暂不支持。",
+                        AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
                 var deleteOriginal = MessageBox.Show(
                     this,
                     $"加密文件已经完成并通过验证。\n\n" +
@@ -1352,6 +1460,11 @@ public partial class MainWindow : Window
             var session = await _archiveService.OpenForBrowsingAsync(
                 request,
                 allowElevated: _allowElevatedMediaBrowsing);
+            if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
+            {
+                session.Dispose();
+                return;
+            }
             CloseArchiveSession();
             ShowUnlockedArchiveSession(session);
         }
@@ -1636,6 +1749,36 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!_allowElevatedMediaBrowsing &&
+            MediaPlayerSelection.ShouldUseDefaultProgram(_mediaPlayerPreferences))
+        {
+            var allowDefaultProgram = true;
+            if (_strictProtection.IsRunning)
+            {
+                allowDefaultProgram = MessageBox.Show(
+                    this,
+                    "严格防护正在运行。系统默认程序无法纳入凝然的内存监控，打开后可能读取临时明文。仍要继续吗？",
+                    "凝然加密 - 严格防护",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No) == MessageBoxResult.Yes;
+            }
+
+            if (allowDefaultProgram)
+            {
+                try
+                {
+                    await _defaultProgramOpenTracker.ExportAndOpenAsync(_archiveSession, entry);
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    ShowFriendlyError("无法使用系统默认程序打开", exception);
+                    // 继续下面原有的凝然内部查看或导出流程。
+                }
+            }
+        }
+
         if (entry.MediaKind is not null)
         {
             if (_allowElevatedMediaBrowsing && entry.MediaKind is
@@ -1868,6 +2011,12 @@ public partial class MainWindow : Window
         {
             return;
         }
+        if (_archiveSession.IsReadOnly)
+        {
+            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var removals = NormalizeRemovalPaths(requestedPaths);
         if (removals.Count == 0)
@@ -1930,6 +2079,12 @@ public partial class MainWindow : Window
         if (_allowElevatedMediaBrowsing)
         {
             ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+        if (_archiveSession?.IsReadOnly == true)
+        {
+            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (_isBusy || _archiveSession is null ||
@@ -2095,6 +2250,17 @@ public partial class MainWindow : Window
     private async Task UpdateUnlockedArchiveAsync(IReadOnlyList<string> removals, IReadOnlyList<ArchiveAppendSource> additions)
     {
         if (_archiveSession is null || _sourcePath is null)
+        {
+            return;
+        }
+        if (_archiveSession.IsReadOnly)
+        {
+            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
         {
             return;
         }
@@ -2458,7 +2624,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CloseUnlockedArchive_Click(object sender, RoutedEventArgs e) => CloseArchiveSession();
+    private async void CloseUnlockedArchive_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
+        {
+            return;
+        }
+
+        CloseArchiveSession();
+    }
 
     private async void StrictProtection_Click(object sender, RoutedEventArgs e)
     {
@@ -2605,6 +2779,7 @@ public partial class MainWindow : Window
         }
         _progressWindow?.SetCancelling();
         _operationCancellation?.Cancel();
+        _defaultProgramOpenTracker.Cleanup();
         CloseArchiveSession();
         await _strictProtection.StopAsync();
 
@@ -2786,6 +2961,10 @@ public partial class MainWindow : Window
             ? UiLanguage.IsEnglish
                 ? "Strict Protection is on, so audio and video currently use the built-in player."
                 : "严格防护已开启，音频和视频当前使用内置播放器。"
+            : MediaPlayerSelection.ShouldUseDefaultProgram(_mediaPlayerPreferences)
+                ? UiLanguage.IsEnglish
+                    ? "Double-clicked files are opened with the Windows default program."
+                    : "双击文件时使用 Windows 默认程序打开。"
             : _mediaPlayerPreferences.AudioVideoPlayer == AudioVideoPlayerChoice.BuiltInPlayer
                 ? UiLanguage.IsEnglish
                     ? "Audio and video currently use the built-in player."
@@ -2886,6 +3065,11 @@ public partial class MainWindow : Window
             (!File.Exists(selectedPath) || !NrArchiveService.IsSupportedArchiveFile(selectedPath)))
         {
             ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
+        if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
+        {
             return;
         }
 
@@ -3024,9 +3208,15 @@ public partial class MainWindow : Window
             ? Visibility.Collapsed
             : Visibility.Visible;
         EncryptAdvancedKeyPanel.Visibility =
-            IsEncrypting && AdvancedRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            IsEncrypting && (AdvancedRadio.IsChecked == true ||
+                (FlexibleRadio.IsChecked == true && FlexibleKeyFileCheck.IsChecked == true))
+                ? Visibility.Visible : Visibility.Collapsed;
         EncryptPhysicalDevicePanel.Visibility =
-            IsEncrypting && PhysicalRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+            IsEncrypting && (PhysicalRadio.IsChecked == true ||
+                (FlexibleRadio.IsChecked == true && FlexiblePhysicalCheck.IsChecked == true))
+                ? Visibility.Visible : Visibility.Collapsed;
+        EncryptFlexiblePanel.Visibility =
+            IsEncrypting && FlexibleRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         EncryptIdentityPanel.Visibility =
             IsEncrypting && SignIdentityCheck.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         DecryptKeyPanel.Visibility = !IsEncrypting ? Visibility.Visible : Visibility.Collapsed;
@@ -3188,6 +3378,8 @@ public partial class MainWindow : Window
         {
             var devices = _physicalDeviceService.ListRegisteredDevices();
             EncryptPhysicalDeviceList.ItemsSource = devices;
+            FlexibleRequiredDeviceList.ItemsSource = devices;
+            FlexibleForbiddenDeviceList.ItemsSource = devices;
             foreach (var device in devices.Where(device => selectedIds.Contains(device.Id)))
             {
                 EncryptPhysicalDeviceList.SelectedItems.Add(device);
@@ -3468,14 +3660,126 @@ public partial class MainWindow : Window
         MaximizeButton.ToolTip = maximized ? "还原" : "最大化";
     }
 
+    private async Task<bool> FinalizeDefaultProgramFilesBeforeCloseAsync()
+    {
+        if (_defaultProgramOpenTracker.Files.Count == 0)
+        {
+            return true;
+        }
+
+        var changed = _defaultProgramOpenTracker.GetChangedFiles();
+        if (changed.Count == 0)
+        {
+            _defaultProgramOpenTracker.Cleanup();
+            return true;
+        }
+
+        if (_archiveSession is null || !_archiveSession.IsOpen ||
+            changed.Any(file => !ReferenceEquals(file.Session, _archiveSession)))
+        {
+            MessageBox.Show(this,
+                "发现通过系统默认程序打开的文件已经修改，但当前安全会话已关闭，无法自动写回。请重新打开原加密文件后再处理。临时文件会在程序关闭时清理。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            _defaultProgramOpenTracker.Cleanup();
+            return true;
+        }
+
+        if (_archiveSession.IsReadOnly || !_archiveSession.CanExportPlaintext || !_archiveSession.IsDirectory ||
+            _archiveSession.IsDelivery || _archiveSession.Mode == EncryptionMode.PhysicalDevice)
+        {
+            MessageBox.Show(this,
+                "发现外部程序修改了临时文件，但当前加密包不支持自动写回。原加密文件没有改变。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            _defaultProgramOpenTracker.Cleanup();
+            return true;
+        }
+
+        if (SelectedArchiveSigningIdentity is not { } identity)
+        {
+            MessageBox.Show(this,
+                "检测到外部程序修改了临时文件。关闭前请在“修改后发送者身份”中选择身份，再次点击关闭。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        using var archivePassword = ReadPassword(ArchivePasswordInput);
+        using var signingPassword = ReadPassword(ArchiveSigningIdentityPasswordInput);
+        if (archivePassword.IsEmpty || signingPassword.IsEmpty)
+        {
+            MessageBox.Show(this,
+                "检测到外部程序修改了临时文件。关闭前请填写加密文件密码和身份密码，再次点击关闭。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        var replacements = changed
+            .GroupBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToArray();
+        var removals = replacements
+            .Select(file => file.RelativePath)
+            .ToArray();
+        var additions = replacements
+            .Select(file => new ArchiveAppendSource(
+                file.TemporaryPath,
+                GetArchiveParentPath(file.RelativePath) ?? string.Empty,
+                Path.GetFileName(file.RelativePath)))
+            .ToArray();
+
+        using var request = new ArchiveUpdateRequest(
+            _archiveSession.ArchivePath,
+            archivePassword,
+            identity.Id,
+            signingPassword,
+            CurrentKeyFilePath,
+            CurrentCompression,
+            removals,
+            additions,
+            new WindowInteropHelper(this).Handle);
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(isEncrypting: true, operationTitle: "正在写回外部程序的修改") { Owner = this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        try
+        {
+            SetBusy(true);
+            _progressWindow.Show();
+            var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
+            var reopened = await _archiveService.RebuildAndOpenArchiveAsync(
+                _archiveSession, request, progress, _operationCancellation.Token);
+            reopened.Dispose();
+            _defaultProgramOpenTracker.Cleanup();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            CloseProgressWindow();
+            ShowFriendlyError("无法写回外部程序的修改", exception);
+            return false;
+        }
+        finally
+        {
+            CloseProgressWindow();
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
+            SetBusy(false);
+        }
+    }
+
     private void Window_Closing(object? sender, CancelEventArgs e)
     {
+        if (_closingCleanupInProgress)
+        {
+            e.Cancel = true;
+            return;
+        }
+
         if (!_isBusy || _operationCancellation is null)
         {
             if (!_closingAnimationComplete)
             {
                 e.Cancel = true;
-                _ = CloseAfterAnimationAsync();
+                _closingCleanupInProgress = true;
+                _ = PrepareCloseAsync();
                 return;
             }
             CloseArchiveSession();
@@ -3493,6 +3797,27 @@ public partial class MainWindow : Window
             _closeAfterCancellation = true;
             _progressWindow?.SetCancelling();
             _operationCancellation.Cancel();
+        }
+    }
+
+    private async Task PrepareCloseAsync()
+    {
+        try
+        {
+            if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
+            {
+                return;
+            }
+
+            _closingCleanupInProgress = false;
+            await CloseAfterAnimationAsync();
+        }
+        finally
+        {
+            if (!_closingAnimationComplete)
+            {
+                _closingCleanupInProgress = false;
+            }
         }
     }
 

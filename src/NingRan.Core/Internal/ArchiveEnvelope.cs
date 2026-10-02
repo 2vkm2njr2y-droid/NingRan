@@ -28,12 +28,13 @@ internal static class ArchiveEnvelope
             {
                 stream.Position = archiveOffset;
                 await ArchiveHeader.InspectAsync(stream, cancellationToken).ConfigureAwait(false);
+                var isFlexible = magic.AsSpan().SequenceEqual(FlexibleArchiveHeader.FlexibleMagic);
                 return new ArchiveInfo(
-                    EncryptionMode.Standard,
+                    isFlexible ? EncryptionMode.Flexible : EncryptionMode.Standard,
                     HidesExactSize: false,
                     HasSenderSignature: true,
                     PhysicalDevices: [],
-                    FormatVersion: archiveOffset == 0 ? "6.1" : "7.0");
+                    FormatVersion: isFlexible ? "9.1" : archiveOffset == 0 ? "6.1" : "7.0");
             }
 
             throw new NingRanException("此文件不是新版隐私格式，当前版本已停止支持旧格式。");

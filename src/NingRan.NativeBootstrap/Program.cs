@@ -339,6 +339,7 @@ internal static class Program
             var extension = Path.GetExtension(path);
             return Path.IsPathFullyQualified(path) && File.Exists(path) &&
                    (string.Equals(extension, ".nrenc", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(extension, ".nrsplit", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(extension, ".jpg", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(extension, ".jpeg", StringComparison.OrdinalIgnoreCase));
         }

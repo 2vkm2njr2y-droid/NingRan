@@ -165,7 +165,7 @@ internal static class IndexedPayloadContainer
         }
     }
 
-    public static async Task<IndexedPayload> OpenAsync(FileStream input, ArchiveHeader header, byte[] dataKey,
+    public static async Task<IndexedPayload> OpenAsync(Stream input, ArchiveHeader header, byte[] dataKey,
         CancellationToken cancellationToken, long archiveOffset = 0, long? archiveLength = null,
         bool allowTrailingIncrementalData = false)
     {
@@ -176,7 +176,7 @@ internal static class IndexedPayloadContainer
             input.Position = checked(archiveOffset + header.Bytes.Length);
             await BinaryFormat.ReadExactlyAsync(input, prefix, cancellationToken).ConfigureAwait(false);
             var (indexBlockCount, indexLength, totalRecordCount, paddingRecords, isDelivery) = ReadPrefix(prefix);
-            indexBytes = await ReadFixedBlocksAsync(input.SafeFileHandle,
+            indexBytes = await ReadFixedBlocksAsync(input,
                 checked(archiveOffset + header.Bytes.Length + PrefixSize),
                 indexBlockCount, indexLength, header, dataKey, prefix, "NRINDEX-V2", cancellationToken).ConfigureAwait(false);
             var payload = ParseIndex(indexBytes);
@@ -200,7 +200,7 @@ internal static class IndexedPayloadContainer
         }
     }
 
-    public static async Task ValidateAllAsync(FileStream input, ArchiveHeader header, byte[] dataKey,
+    public static async Task ValidateAllAsync(Stream input, ArchiveHeader header, byte[] dataKey,
         IndexedPayload payload, Action<long, string>? reportProgress, CancellationToken cancellationToken,
         long archiveOffset = 0)
     {
@@ -214,7 +214,7 @@ internal static class IndexedPayloadContainer
             long completed = 0;
             for (long block = 0; block < payload.IndexBlockCount; block++)
             {
-                await ReadAndDecryptFixedBlockAsync(input.SafeFileHandle,
+                await ReadAndDecryptFixedBlockAsync(input,
                     checked(archiveOffset + header.Bytes.Length + PrefixSize), header,
                     cipher, checked((ulong)block), ciphertext, tag, plaintext, prefix, "NRINDEX-V2", cancellationToken)
                     .ConfigureAwait(false);
@@ -233,7 +233,7 @@ internal static class IndexedPayloadContainer
             for (long block = 0; block < payload.PaddingRecordCount; block++)
             {
                 var absolute = checked(payload.TotalBlockCount - payload.PaddingRecordCount + block);
-                await ReadAndDecryptFixedBlockAsync(input.SafeFileHandle,
+                await ReadAndDecryptFixedBlockAsync(input,
                     checked(archiveOffset + DataStart(header, payload)), header, cipher,
                     checked((ulong)absolute), ciphertext, tag, plaintext, prefix, "NRDATA-V2", cancellationToken)
                     .ConfigureAwait(false);
@@ -249,7 +249,7 @@ internal static class IndexedPayloadContainer
         }
     }
 
-    public static async Task ReadEntryBlockAsync(FileStream input, ArchiveHeader header, byte[] dataKey,
+    public static async Task ReadEntryBlockAsync(Stream input, ArchiveHeader header, byte[] dataKey,
         IndexedPayload payload, IndexedPayloadEntry entry, long blockOffset, byte[] ciphertext, byte[] tag,
         byte[] plaintext, ChaCha20Poly1305 cipher, CancellationToken cancellationToken, long archiveOffset = 0)
     {
@@ -264,8 +264,8 @@ internal static class IndexedPayloadContainer
         try
         {
             var recordOffset = checked(archiveOffset + DataStart(header, payload) + block.DataOffset);
-            await ReadExactlyAtAsync(input.SafeFileHandle, stored, recordOffset, cancellationToken).ConfigureAwait(false);
-            await ReadExactlyAtAsync(input.SafeFileHandle, tag.AsMemory(0, TagSize),
+            await ReadExactlyAtAsync(input, stored, recordOffset, cancellationToken).ConfigureAwait(false);
+            await ReadExactlyAtAsync(input, tag.AsMemory(0, TagSize),
                 checked(recordOffset + block.StoredLength), cancellationToken).ConfigureAwait(false);
             DecryptRecord(cipher, header, entry, blockOffset, stored.Span, tag, plaintext, block, prefix);
         }
@@ -277,7 +277,7 @@ internal static class IndexedPayloadContainer
         }
     }
 
-    public static async Task CopyEntryToStreamAsync(FileStream input, ArchiveHeader header, byte[] dataKey,
+    public static async Task CopyEntryToStreamAsync(Stream input, ArchiveHeader header, byte[] dataKey,
         IndexedPayload payload, IndexedPayloadEntry entry, Stream output, CancellationToken cancellationToken,
         long archiveOffset = 0)
     {
@@ -465,6 +465,42 @@ internal static class IndexedPayloadContainer
         => await ReadFixedBlocksAtAsync(handle, payloadOffset, blockCount, contentLength, 0, header, dataKey,
             prefix, purpose, cancellationToken).ConfigureAwait(false);
 
+    private static async Task<byte[]> ReadFixedBlocksAsync(Stream input,
+        long payloadOffset, long blockCount, int contentLength, ArchiveHeader header, byte[] dataKey, byte[] prefix,
+        string purpose, CancellationToken cancellationToken)
+    {
+        var result = new byte[contentLength];
+        var ciphertext = new byte[BlockSize];
+        var plaintext = new byte[BlockSize];
+        var tag = new byte[TagSize];
+        try
+        {
+            using var cipher = new ChaCha20Poly1305(dataKey);
+            for (long block = 0; block < blockCount; block++)
+            {
+                await ReadAndDecryptFixedBlockAsync(input,
+                    checked(payloadOffset + block * FixedRecordSize), header, cipher,
+                    checked((ulong)block), ciphertext, tag, plaintext, prefix, purpose, cancellationToken)
+                    .ConfigureAwait(false);
+                var offset = checked((int)(block * BlockSize));
+                var count = Math.Min(BlockSize, contentLength - offset);
+                plaintext.AsSpan(0, count).CopyTo(result.AsSpan(offset));
+            }
+            return result;
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(result);
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(ciphertext);
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(tag);
+        }
+    }
+
     internal static async Task<byte[]> ReadFixedBlocksAtAsync(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
         long payloadOffset, long blockCount, int contentLength, long startBlock, ArchiveHeader header, byte[] dataKey,
         byte[] prefix, string purpose, CancellationToken cancellationToken)
@@ -504,6 +540,26 @@ internal static class IndexedPayloadContainer
         var recordOffset = checked(payloadOffset + checked((long)blockIndex * FixedRecordSize));
         await ReadAndDecryptFixedBlockAtAsync(handle, recordOffset, header, cipher, blockIndex, ciphertext, tag,
             plaintext, prefix, purpose, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task ReadAndDecryptFixedBlockAsync(Stream input,
+        long recordOffset, ArchiveHeader header, ChaCha20Poly1305 cipher, ulong blockIndex, byte[] ciphertext,
+        byte[] tag, byte[] plaintext, byte[] prefix, string purpose, CancellationToken cancellationToken)
+    {
+        await ReadExactlyAtAsync(input, ciphertext, recordOffset, cancellationToken).ConfigureAwait(false);
+        await ReadExactlyAtAsync(input, tag, checked(recordOffset + BlockSize), cancellationToken).ConfigureAwait(false);
+        var nonce = CreateNonce(header.PayloadNoncePrefix, blockIndex);
+        var aad = CreateAssociatedData(header.HeaderHash, prefix, blockIndex, purpose);
+        try { cipher.Decrypt(nonce, ciphertext, tag, plaintext, aad); }
+        catch (CryptographicException exception)
+        {
+            throw new NingRanException("加密内容未通过完整性检查，文件可能已被修改或损坏。", exception);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(nonce);
+            CryptographicOperations.ZeroMemory(aad);
+        }
     }
 
     internal static async Task ReadAndDecryptFixedBlockAtAsync(Microsoft.Win32.SafeHandles.SafeFileHandle handle,
@@ -989,6 +1045,27 @@ internal static class IndexedPayloadContainer
         }
     }
 
+    internal static async Task ReadExactlyAtAsync(Stream input, Memory<byte> buffer,
+        long offset, CancellationToken cancellationToken)
+    {
+        if (input is IArchiveRandomAccessStream random)
+        {
+            var completed = 0;
+            while (completed < buffer.Length)
+            {
+                var read = await random.ReadAtAsync(buffer[completed..], checked(offset + completed), cancellationToken)
+                    .ConfigureAwait(false);
+                if (read == 0) throw new NingRanException("加密文件不完整。");
+                completed += read;
+            }
+            return;
+        }
+
+        if (input is not FileStream file)
+            throw new NingRanException("当前加密文件不支持安全随机读取。");
+        await ReadExactlyAtAsync(file.SafeFileHandle, buffer, offset, cancellationToken).ConfigureAwait(false);
+    }
+
     private static void WriteString(BinaryWriter writer, string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value);
@@ -1107,3 +1184,4 @@ internal static class IndexedPayloadContainer
         }
     }
 }
+

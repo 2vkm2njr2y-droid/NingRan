@@ -65,6 +65,11 @@ public sealed class NrArchiveService
                 return false;
             }
 
+            if (NrSplitArchiveService.IsSupportedPartFile(fullPath))
+            {
+                return true;
+            }
+
             if (string.Equals(Path.GetExtension(fullPath), ".nrenc", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
@@ -118,6 +123,23 @@ public sealed class NrArchiveService
             throw new NingRanException("请选择存在的凝然加密文件。");
         }
 
+        if (NrSplitArchiveService.IsSupportedPartFile(fullPath))
+        {
+            await using var splitStream = NrSplitArchiveService.OpenReadStream(fullPath);
+            var splitInfo = await ArchiveEnvelope.InspectAsync(splitStream, cancellationToken, 0)
+                .ConfigureAwait(false);
+            var splitFileInfo = new FileInfo(fullPath);
+            return splitInfo with
+            {
+                Mode = EncryptionMode.Standard,
+                HidesExactSize = false,
+                PhysicalDevices = [],
+                FormatVersion = "split-1",
+                FileSize = splitStream.Length,
+                CreatedAtLocal = splitFileInfo.CreationTime,
+            };
+        }
+
         var isPhotoArchive = JpegArchiveContainer.IsEncryptedPhoto(fullPath);
         await using var stream = JpegArchiveContainer.OpenArchiveReadStream(fullPath, exclusive: false);
         var region = JpegArchiveContainer.GetArchiveRegion(stream, isPhotoArchive);
@@ -163,8 +185,16 @@ public sealed class NrArchiveService
             ? []
             : request.SourcePaths.Select(Path.GetFullPath).ToArray();
         var sourcePath = Path.GetFullPath(request.SourcePath);
-        var outputPath = JpegArchiveContainer.NormalizeOutputPath(request.OutputPath);
-        var isPhotoArchive = JpegArchiveContainer.IsPhotoArchivePath(outputPath);
+        var isSplitArchive = request.SplitPartSizeBytes is not null;
+        if (isSplitArchive && request.SplitPartSizeBytes is < NrSplitArchiveService.MinimumPartSize or > NrSplitArchiveService.MaximumPartSize)
+        {
+            throw new NingRanException("分片大小必须在 100 MB 到 64 GB 之间。");
+        }
+        var hasCoverImage = !string.IsNullOrWhiteSpace(request.CoverImagePath);
+        var outputPath = isSplitArchive
+            ? Path.ChangeExtension(Path.GetFullPath(request.OutputPath), NrSplitArchiveService.Extension)
+            : JpegArchiveContainer.NormalizeOutputPath(request.OutputPath, hasCoverImage);
+        var isPhotoArchive = !isSplitArchive && hasCoverImage && JpegArchiveContainer.IsPhotoArchivePath(outputPath);
         if (request.IsVaultExport && isPhotoArchive)
         {
             throw new NingRanException("保险箱只能导出为 .nrenc 加密包，不能使用照片外观。");
@@ -172,10 +202,6 @@ public sealed class NrArchiveService
         if (request.IsDelivery && isPhotoArchive)
         {
             throw new NingRanException("安全交付包必须保存为 .nrenc 文件，不能使用照片外观。");
-        }
-        if (isPhotoArchive && string.IsNullOrWhiteSpace(request.CoverImagePath))
-        {
-            throw new NingRanException("请选择一张 JPEG 照片作为加密文件封面。");
         }
         foreach (var selectedSource in sourcePaths)
         {
@@ -221,11 +247,26 @@ public sealed class NrArchiveService
         var temporaryPath = Path.Combine(outputDirectory, $".ningran-{Guid.NewGuid():N}.part");
         Guid? temporaryRegistration = null;
         FileStream? temporaryFile = null;
+        SplitArchivePartWriter? splitWriter = null;
+        IReadOnlyList<string>? createdSplitPaths = null;
         var outputCreated = false;
         ArchiveSizeReport? sizeReport = null;
         try
         {
-            if (request.Mode == EncryptionMode.Advanced)
+            if (request.Mode == EncryptionMode.Flexible)
+            {
+                request.ProtectionPolicy?.ValidateForCreation();
+                if (request.ProtectionPolicy is null)
+                    throw new NingRanException("新组合保护格式缺少解锁规则。 ");
+                if (request.ProtectionPolicy.Requires(ProtectionFactor.KeyFile) &&
+                    !string.IsNullOrWhiteSpace(request.KeyFilePath))
+                {
+                    reporter.Report(CryptoStage.DerivingKey, 0, totalWork, "正在读取并核验密匙文件…");
+                    keyFileSecret = await _keyFileService.UnlockAsync(
+                        request.KeyFilePath, request.Password, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            else if (request.Mode == EncryptionMode.Advanced)
             {
                 if (string.IsNullOrWhiteSpace(request.KeyFilePath))
                 {
@@ -261,7 +302,37 @@ public sealed class NrArchiveService
                 signingIdentity = CreateEphemeralTestingIdentity();
             }
 
-            if (request.Mode == EncryptionMode.PhysicalDevice)
+            if (request.Mode == EncryptionMode.Flexible)
+            {
+                if (signingIdentity is null)
+                {
+                    reporter.Report(CryptoStage.DerivingKey, 0, totalWork, "正在解锁发送者身份…");
+                    signingIdentity = await _identityService.UnlockLocalIdentityAsync(
+                        request.SigningIdentityId!, request.SigningIdentityPassword!, cancellationToken).ConfigureAwait(false);
+                }
+                reporter.Report(CryptoStage.DerivingKey, 0, totalWork, "正在验证组合解锁条件…");
+                var flexible = await FlexibleArchiveHeader.CreateAsync(
+                    request.Password,
+                    keyFileSecret?.Memory ?? ReadOnlyMemory<byte>.Empty,
+                    request.ProtectionPolicy!,
+                    _kdfParameters,
+                    _physicalDeviceProvider,
+                    request.OwnerWindowHandle,
+                    cancellationToken).ConfigureAwait(false);
+                archiveHeader = flexible.Header;
+                dataKey = flexible.DataKey;
+                physicalUnlocks = flexible.Unlocks;
+                physicalMonitor = physicalUnlocks.Count > 0
+                    ? new PhysicalDeviceMonitor(
+                        physicalUnlocks,
+                        cancellationToken,
+                        _physicalDeviceProvider is IPhysicalDevicePresence presence && flexible.Header.ForbiddenPhysicalLookupHashes.Count > 0
+                            ? () => presence.IsAnyForbiddenStorageConnected(
+                                flexible.Header.Bytes.AsMemory(24, 16), flexible.Header.ForbiddenPhysicalLookupHashes)
+                            : null)
+                    : null;
+            }
+            else if (request.Mode == EncryptionMode.PhysicalDevice)
             {
                 if (signingIdentity is null)
                 {
@@ -316,12 +387,24 @@ public sealed class NrArchiveService
 
             var operationToken = physicalMonitor?.Token ?? cancellationToken;
 
-            temporaryFile = WindowsFileSystemSafety.CreateNewTemporaryFile(temporaryPath);
-            temporaryRegistration = TemporaryFileRegistry.Register(temporaryFile, temporaryPath);
             const long archiveOffset = 0;
-            await temporaryFile.WriteAsync(archiveHeader.Bytes, operationToken).ConfigureAwait(false);
+            Stream encryptionOutput;
+            if (isSplitArchive)
+            {
+                splitWriter = NrSplitArchiveService.CreateWriter(outputPath, request.SplitPartSizeBytes!.Value);
+                await splitWriter.WriteAsync(archiveHeader.Bytes, operationToken).ConfigureAwait(false);
+                // 分片模式直接写入分片暂存文件，不再在同一磁盘上额外保留一份完整临时包。
+                encryptionOutput = new SplitTeeWriteStream(splitWriter);
+            }
+            else
+            {
+                temporaryFile = WindowsFileSystemSafety.CreateNewTemporaryFile(temporaryPath);
+                temporaryRegistration = TemporaryFileRegistry.Register(temporaryFile, temporaryPath);
+                await temporaryFile.WriteAsync(archiveHeader.Bytes, operationToken).ConfigureAwait(false);
+                encryptionOutput = temporaryFile;
+            }
             var indexedPayload = await IndexedPayloadContainer.WriteAsync(
-                temporaryFile,
+                encryptionOutput,
                 manifest,
                 archiveHeader,
                 dataKey,
@@ -337,9 +420,27 @@ public sealed class NrArchiveService
                     message),
                 operationToken).ConfigureAwait(false);
 
-            await temporaryFile.FlushAsync(operationToken).ConfigureAwait(false);
-            temporaryFile.Flush(flushToDisk: true);
-            var archiveLength = temporaryFile.Length;
+            if (temporaryFile is not null)
+            {
+                await temporaryFile.FlushAsync(operationToken).ConfigureAwait(false);
+                temporaryFile.Flush(flushToDisk: true);
+            }
+            if (splitWriter is not null)
+            {
+                var splitFlush = splitWriter;
+                await splitFlush.FlushAsync(operationToken).ConfigureAwait(false);
+            }
+            Stream? verificationInput = temporaryFile;
+            if (splitWriter is not null)
+            {
+                // 先封存分片头，再通过分片读取流完成与单文件相同的结构和内容复验。
+                createdSplitPaths = await splitWriter.CompleteAsync(operationToken).ConfigureAwait(false);
+                splitWriter = null;
+                verificationInput = NrSplitArchiveService.OpenReadStream(createdSplitPaths[0]);
+            }
+
+            var archiveLength = verificationInput?.Length
+                ?? throw new NingRanException("未能打开刚生成的加密文件。");
             sizeReport = IndexedPayloadContainer.CreateSizeReport(indexedPayload, archiveLength);
 
             reporter.Report(
@@ -351,14 +452,14 @@ public sealed class NrArchiveService
             try
             {
                 reopenedPayload = await IndexedPayloadContainer.OpenAsync(
-                    temporaryFile,
+                    verificationInput,
                     archiveHeader,
                     dataKey,
                     operationToken,
                     archiveOffset,
                     archiveLength).ConfigureAwait(false);
                 await IndexedPayloadContainer.ValidateAllAsync(
-                    temporaryFile,
+                    verificationInput,
                     archiveHeader,
                     dataKey,
                     reopenedPayload,
@@ -379,6 +480,10 @@ public sealed class NrArchiveService
             {
                 reopenedPayload?.Dispose();
                 indexedPayload.Dispose();
+                if (!ReferenceEquals(verificationInput, temporaryFile))
+                {
+                    verificationInput?.Dispose();
+                }
             }
 
             if (dataKey is not null)
@@ -389,13 +494,26 @@ public sealed class NrArchiveService
 
             operationToken.ThrowIfCancellationRequested();
             reporter.Report(CryptoStage.Finalizing, totalWork, totalWork, "正在完成保存…");
-            var finalTemporaryFile = temporaryFile;
+            if (splitWriter is not null)
+            {
+                createdSplitPaths = await splitWriter.CompleteAsync(operationToken).ConfigureAwait(false);
+                splitWriter = null;
+            }
             var archiveHash = Array.Empty<byte>();
             if (!request.IsVaultExport)
             {
-                finalTemporaryFile.Position = 0;
-                archiveHash = await SHA256.HashDataAsync(finalTemporaryFile, operationToken)
-                    .ConfigureAwait(false);
+                if (createdSplitPaths is not null)
+                {
+                    await using var splitHashInput = NrSplitArchiveService.OpenReadStream(createdSplitPaths[0]);
+                    archiveHash = await SHA256.HashDataAsync(splitHashInput, operationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    temporaryFile!.Position = 0;
+                    archiveHash = await SHA256.HashDataAsync(temporaryFile, operationToken)
+                        .ConfigureAwait(false);
+                }
             }
             if (physicalUnlocks is not null)
             {
@@ -406,7 +524,7 @@ public sealed class NrArchiveService
                 }
             }
 
-            var archiveSize = finalTemporaryFile.Length;
+            var archiveSize = archiveLength;
             var sourceSnapshot = manifest.Entries.Where(entry => !string.IsNullOrWhiteSpace(entry.FullPath)).Select(entry => new SourceEntrySnapshot(
                 entry.Kind,
                 entry.FullPath,
@@ -425,17 +543,34 @@ public sealed class NrArchiveService
             }
 
             WindowsFileIdentity archiveIdentity;
+            var resultArchivePath = outputPath;
             if (isPhotoArchive)
             {
                 // The temporary archive uses an exclusive write handle. Close it only after
                 // verification and hashing so the finished bytes can be copied into the ADS.
-                temporaryFile.Dispose();
+                temporaryFile!.Dispose();
                 temporaryFile = null;
                 await JpegArchiveContainer.CopyCoverToNewFileAsync(
                     request.CoverImagePath!, outputPath, operationToken).ConfigureAwait(false);
                 outputCreated = true;
                 await JpegArchiveContainer.CopyArchiveToAlternateDataStreamAsync(
                     temporaryPath, outputPath, operationToken).ConfigureAwait(false);
+                if (archiveHash.Length > 0)
+                {
+                    var copiedHash = await JpegArchiveContainer.ComputeArchiveHashAsync(
+                        outputPath, operationToken).ConfigureAwait(false);
+                    try
+                    {
+                        if (!CryptographicOperations.FixedTimeEquals(archiveHash, copiedHash))
+                        {
+                            throw new NingRanException("照片隐藏加密内容保存后的完整性检查失败，未完成文件会被清理。");
+                        }
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(copiedHash);
+                    }
+                }
                 archiveSize = JpegArchiveContainer.GetStorageSize(outputPath);
                 using var archiveHandle = WindowsFileSystemSafety.OpenInputFile(outputPath);
                 archiveIdentity = WindowsFileSystemSafety.GetIdentity(archiveHandle);
@@ -446,9 +581,23 @@ public sealed class NrArchiveService
 
                 TemporaryFileRegistry.Unregister(temporaryRegistration);
             }
+            else if (createdSplitPaths is not null)
+            {
+                using var splitHandle = WindowsFileSystemSafety.OpenInputFile(createdSplitPaths[0]);
+                archiveIdentity = WindowsFileSystemSafety.GetIdentity(splitHandle);
+                resultArchivePath = createdSplitPaths[0];
+                if (temporaryFile is not null)
+                {
+                    temporaryFile.Dispose();
+                    temporaryFile = null;
+                    TryDeleteFile(temporaryPath);
+                }
+                TemporaryFileRegistry.Unregister(temporaryRegistration);
+                outputCreated = true;
+            }
             else
             {
-                archiveIdentity = WindowsFileSystemSafety.GetIdentity(finalTemporaryFile.SafeFileHandle);
+                archiveIdentity = WindowsFileSystemSafety.GetIdentity(temporaryFile!.SafeFileHandle);
                 WindowsFileSystemSafety.RenameOpenFile(
                     temporaryFile.SafeFileHandle,
                     temporaryPath,
@@ -461,7 +610,7 @@ public sealed class NrArchiveService
 
             reporter.Report(CryptoStage.Finalizing, totalWork, totalWork, "加密完成并通过验证。");
             return new EncryptionResult(
-                outputPath,
+                resultArchivePath,
                 archiveSize,
                 sizeReport ?? throw new NingRanException("未能生成压缩效果报告。"),
                 sourceSnapshot,
@@ -472,6 +621,17 @@ public sealed class NrArchiveService
         }
         catch (Exception exception)
         {
+            if (splitWriter is not null)
+            {
+                await splitWriter.DisposeAsync().ConfigureAwait(false);
+            }
+            if (createdSplitPaths is not null && !outputCreated)
+            {
+                foreach (var splitPath in createdSplitPaths)
+                {
+                    TryDeleteFile(splitPath);
+                }
+            }
             var firstCleaned = TryDeleteTemporaryFile(ref temporaryFile, temporaryPath);
             if (firstCleaned)
             {
@@ -545,6 +705,7 @@ public sealed class NrArchiveService
         var reporter = new ProgressReporter(progress);
         KeyFileSecret? keyFileSecret = null;
         PhysicalDeviceUnlock? physicalUnlock = null;
+        IReadOnlyList<PhysicalDeviceUnlock>? physicalUnlocks = null;
         PhysicalDeviceMonitor? physicalMonitor = null;
         byte[]? dataKey = null;
         StableDirectoryPath? destinationLock = null;
@@ -583,9 +744,16 @@ public sealed class NrArchiveService
                     cancellationToken).ConfigureAwait(false);
                 dataKey = unlocked.DataKey;
                 physicalUnlock = unlocked.PhysicalUnlock;
-                if (physicalUnlock is not null)
+                physicalUnlocks = unlocked.PhysicalUnlocks;
+                if (physicalUnlocks.Count > 0)
                 {
-                    physicalMonitor = new PhysicalDeviceMonitor([physicalUnlock], cancellationToken);
+                    physicalMonitor = new PhysicalDeviceMonitor(
+                        physicalUnlocks,
+                        cancellationToken,
+                        unlocked.Header.IsFlexible && _physicalDeviceProvider is IPhysicalDevicePresence presence && unlocked.Header.ForbiddenPhysicalLookupHashes.Count > 0
+                            ? () => presence.IsAnyForbiddenStorageConnected(
+                                unlocked.Header.Bytes.AsMemory(24, 16), unlocked.Header.ForbiddenPhysicalLookupHashes)
+                            : null);
                 }
 
                 var operationToken = physicalMonitor?.Token ?? cancellationToken;
@@ -707,7 +875,14 @@ public sealed class NrArchiveService
                 await physicalMonitor.DisposeAsync().ConfigureAwait(false);
             }
 
-            physicalUnlock?.Dispose();
+            if (physicalUnlocks is not null)
+            {
+                foreach (var unlock in physicalUnlocks) unlock.Dispose();
+            }
+            else
+            {
+                physicalUnlock?.Dispose();
+            }
             if (dataKey is not null)
             {
                 CryptographicOperations.ZeroMemory(dataKey);
@@ -715,6 +890,112 @@ public sealed class NrArchiveService
 
             keyFileSecret?.Dispose();
             destinationLock?.Dispose();
+        }
+    }
+
+    private async Task<SecureArchiveSession> OpenSplitForBrowsingAsync(
+        DecryptRequest request,
+        string archivePath,
+        CancellationToken cancellationToken)
+    {
+        KeyFileSecret? keyFileSecret = null;
+        Stream? input = null;
+        ArchiveHeader? header = null;
+        byte[]? dataKey = null;
+        PhysicalDeviceUnlock? physicalUnlock = null;
+        IReadOnlyList<PhysicalDeviceUnlock>? physicalUnlocks = null;
+        PhysicalDeviceMonitor? physicalMonitor = null;
+        IndexedPayloadContainer.IndexedPayload? payload = null;
+        try
+        {
+            input = NrSplitArchiveService.OpenReadStream(archivePath);
+            await ArchiveEnvelope.InspectAsync(input, cancellationToken, 0).ConfigureAwait(false);
+            input.Position = 0;
+            if (!string.IsNullOrWhiteSpace(request.KeyFilePath))
+            {
+                keyFileSecret = await _keyFileService.UnlockAsync(
+                    request.KeyFilePath,
+                    request.Password,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var unlocked = await ArchiveHeader.ReadAndUnlockAsync(
+                input,
+                request.Password,
+                keyFileSecret?.Memory ?? ReadOnlyMemory<byte>.Empty,
+                _physicalDeviceProvider,
+                request.OwnerWindowHandle,
+                cancellationToken,
+                request.ExpectedMode).ConfigureAwait(false);
+            header = unlocked.Header;
+            dataKey = unlocked.DataKey;
+            physicalUnlock = unlocked.PhysicalUnlock;
+            physicalUnlocks = unlocked.PhysicalUnlocks;
+            if (physicalUnlocks.Count > 0)
+            {
+                physicalMonitor = new PhysicalDeviceMonitor(
+                    physicalUnlocks,
+                    cancellationToken,
+                    unlocked.Header.IsFlexible && _physicalDeviceProvider is IPhysicalDevicePresence presence && unlocked.Header.ForbiddenPhysicalLookupHashes.Count > 0
+                        ? () => presence.IsAnyForbiddenStorageConnected(
+                            unlocked.Header.Bytes.AsMemory(24, 16), unlocked.Header.ForbiddenPhysicalLookupHashes)
+                        : null);
+            }
+
+            var operationToken = physicalMonitor?.Token ?? cancellationToken;
+            payload = await IndexedPayloadContainer.OpenAsync(
+                input,
+                header,
+                dataKey,
+                operationToken,
+                0,
+                input.Length,
+                allowTrailingIncrementalData: false).ConfigureAwait(false);
+            var sender = VerifyDecryptedIndexedPayloadIdentity(payload, request.TrustedSenderId);
+            var session = new SecureArchiveSession(
+                input,
+                header,
+                dataKey,
+                payload,
+                physicalUnlock,
+                physicalMonitor,
+                sender.Name,
+                sender.IsTrusted,
+                archivePath,
+                0,
+                Math.Max(input.Length, 1),
+                isReadOnly: true,
+                physicalUnlocks: physicalUnlocks);
+            input = null;
+            header = null;
+            dataKey = null;
+            payload = null;
+            physicalUnlock = null;
+            physicalUnlocks = null;
+            physicalMonitor = null;
+            return session;
+        }
+        catch
+        {
+            payload?.Dispose();
+            if (dataKey is not null) CryptographicOperations.ZeroMemory(dataKey);
+            if (header is not null)
+            {
+                CryptographicOperations.ZeroMemory(header.Bytes);
+                CryptographicOperations.ZeroMemory(header.PayloadNoncePrefix);
+                CryptographicOperations.ZeroMemory(header.HeaderHash);
+            }
+            if (physicalMonitor is not null)
+            {
+                await physicalMonitor.DisposeAsync().ConfigureAwait(false);
+            }
+            physicalUnlock?.Dispose();
+            input?.Dispose();
+            throw;
+        }
+        finally
+        {
+            keyFileSecret?.Dispose();
         }
     }
 
@@ -742,6 +1023,11 @@ public sealed class NrArchiveService
             throw new NingRanException("请选择存在的凝然加密文件。");
         }
 
+        if (NrSplitArchiveService.IsSupportedPartFile(archivePath))
+        {
+            return await OpenSplitForBrowsingAsync(request, archivePath, cancellationToken).ConfigureAwait(false);
+        }
+
         // 如果上一次增量提交在当前进程中断过，先处理同一加密包的登记，
         // 再建立新的独占读取会话，避免新修改覆盖尚未完成的恢复记录。
         var recovery = IncrementalArchiveRecovery.RecoverAbandoned(archivePath);
@@ -756,6 +1042,7 @@ public sealed class NrArchiveService
         ArchiveHeader? header = null;
         byte[]? dataKey = null;
         PhysicalDeviceUnlock? physicalUnlock = null;
+        IReadOnlyList<PhysicalDeviceUnlock>? physicalUnlocks = null;
         PhysicalDeviceMonitor? physicalMonitor = null;
         IndexedPayloadContainer.IndexedPayload? payload = null;
         try
@@ -786,9 +1073,16 @@ public sealed class NrArchiveService
             header = unlocked.Header;
             dataKey = unlocked.DataKey;
             physicalUnlock = unlocked.PhysicalUnlock;
-            if (physicalUnlock is not null)
+            physicalUnlocks = unlocked.PhysicalUnlocks;
+            if (physicalUnlocks.Count > 0)
             {
-                physicalMonitor = new PhysicalDeviceMonitor([physicalUnlock], cancellationToken);
+                physicalMonitor = new PhysicalDeviceMonitor(
+                    physicalUnlocks,
+                    cancellationToken,
+                    unlocked.Header.IsFlexible && _physicalDeviceProvider is IPhysicalDevicePresence presence && unlocked.Header.ForbiddenPhysicalLookupHashes.Count > 0
+                        ? () => presence.IsAnyForbiddenStorageConnected(
+                            unlocked.Header.Bytes.AsMemory(24, 16), unlocked.Header.ForbiddenPhysicalLookupHashes)
+                        : null);
             }
 
             var operationToken = physicalMonitor?.Token ?? cancellationToken;
@@ -825,6 +1119,7 @@ public sealed class NrArchiveService
             dataKey = null;
             payload = null;
             physicalUnlock = null;
+            physicalUnlocks = null;
             physicalMonitor = null;
             return session;
         }

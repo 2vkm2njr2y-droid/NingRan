@@ -48,7 +48,8 @@ public sealed class EncryptRequest : IDisposable
         string? SigningIdentityId = null,
         SensitivePassword? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
-        nint OwnerWindowHandle = 0)
+        nint OwnerWindowHandle = 0,
+        ProtectionPolicy? ProtectionPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(SourceVault);
         this.SourceVault = SourceVault;
@@ -63,6 +64,7 @@ public sealed class EncryptRequest : IDisposable
         this.SigningIdentityPassword = SigningIdentityPassword;
         this.PhysicalDevices = PhysicalDevices?.ToArray() ?? [];
         this.OwnerWindowHandle = OwnerWindowHandle;
+        this.ProtectionPolicy = ProtectionPolicy;
     }
 
     public EncryptRequest(
@@ -77,7 +79,8 @@ public sealed class EncryptRequest : IDisposable
         string? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
         nint OwnerWindowHandle = 0,
-        string? CoverImagePath = null)
+        string? CoverImagePath = null,
+        ProtectionPolicy? ProtectionPolicy = null)
         : this(
             SourcePath,
             OutputPath,
@@ -90,7 +93,8 @@ public sealed class EncryptRequest : IDisposable
             SigningIdentityPassword is null ? null : SensitivePassword.FromString(SigningIdentityPassword),
             PhysicalDevices,
             OwnerWindowHandle,
-            CoverImagePath)
+            CoverImagePath,
+            ProtectionPolicy)
     {
     }
 
@@ -106,7 +110,8 @@ public sealed class EncryptRequest : IDisposable
         SensitivePassword? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
         nint OwnerWindowHandle = 0,
-        string? CoverImagePath = null)
+        string? CoverImagePath = null,
+        ProtectionPolicy? ProtectionPolicy = null)
     {
         SourcePaths = [SourcePath];
         this.OutputPath = OutputPath;
@@ -120,6 +125,7 @@ public sealed class EncryptRequest : IDisposable
         this.PhysicalDevices = PhysicalDevices?.ToArray() ?? [];
         this.OwnerWindowHandle = OwnerWindowHandle;
         this.CoverImagePath = CoverImagePath;
+        this.ProtectionPolicy = ProtectionPolicy;
     }
 
     /// <summary>创建安全交付包时使用，可同时包含多个顶层文件和文件夹。</summary>
@@ -135,7 +141,8 @@ public sealed class EncryptRequest : IDisposable
         string? SigningIdentityId = null,
         SensitivePassword? SigningIdentityPassword = null,
         IReadOnlyList<PhysicalDeviceDescriptor>? PhysicalDevices = null,
-        nint OwnerWindowHandle = 0)
+        nint OwnerWindowHandle = 0,
+        ProtectionPolicy? ProtectionPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(SourcePaths);
         if (SourcePaths.Count == 0)
@@ -155,6 +162,7 @@ public sealed class EncryptRequest : IDisposable
         this.SigningIdentityPassword = SigningIdentityPassword;
         this.PhysicalDevices = PhysicalDevices?.ToArray() ?? [];
         this.OwnerWindowHandle = OwnerWindowHandle;
+        this.ProtectionPolicy = ProtectionPolicy;
     }
 
     public string SourcePath => SourceVault?.VaultPath ?? SourcePaths[0];
@@ -185,7 +193,12 @@ public sealed class EncryptRequest : IDisposable
 
     public nint OwnerWindowHandle { get; }
 
+    public ProtectionPolicy? ProtectionPolicy { get; }
+
     public string? CoverImagePath { get; }
+
+    /// <summary>启用分片加密时的单片最大大小；为空表示使用普通单文件格式。</summary>
+    public long? SplitPartSizeBytes { get; init; }
 
     public DeliveryPackageInfo? DeliveryInfo { get; }
 

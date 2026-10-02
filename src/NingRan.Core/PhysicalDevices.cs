@@ -106,6 +106,13 @@ public interface IPhysicalDeviceProvider
         CancellationToken cancellationToken);
 }
 
+public interface IPhysicalDevicePresence
+{
+    bool IsAnyForbiddenStorageConnected(
+        ReadOnlyMemory<byte> archiveSalt,
+        IReadOnlyList<byte[]> forbiddenLookupHashes);
+}
+
 public sealed record AnonymousPhysicalDeviceRequirement(
     byte[] DeviceLookupHash,
     byte[] SecretSalt);

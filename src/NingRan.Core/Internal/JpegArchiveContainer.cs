@@ -1,4 +1,8 @@
+using System.Buffers.Binary;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 
 namespace NingRan.Core.Internal;
 
@@ -148,21 +152,92 @@ internal static class JpegArchiveContainer
         await using var source = new FileStream(
             archiveTemporaryPath,
             FileMode.Open,
-            FileAccess.Read,
+            FileAccess.ReadWrite,
             FileShare.Read,
             1024 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
         await using var target = new FileStream(
             adsPath,
             FileMode.CreateNew,
-            FileAccess.Write,
+            FileAccess.ReadWrite,
             FileShare.None,
             1024 * 1024,
-            FileOptions.Asynchronous | FileOptions.WriteThrough);
-        await source.CopyToAsync(target, 1024 * 1024, cancellationToken).ConfigureAwait(false);
+            FileOptions.Asynchronous | FileOptions.RandomAccess);
+
+        // The encrypted archive has already been fully verified in the staging
+        // file. Mark both streams sparse so that the destination can reserve its
+        // logical length without allocating another full copy. Each source
+        // range is released immediately after its bytes are durable in the ADS;
+        // peak physical usage therefore stays close to one archive plus a small
+        // buffer instead of briefly requiring two 100 GB files.
+        var archiveLength = source.Length;
+        MarkSparse(source.SafeFileHandle);
+        MarkSparse(target.SafeFileHandle);
+        target.SetLength(archiveLength);
+
+        var buffer = new byte[64 * 1024 * 1024];
+        for (long offset = 0; offset < archiveLength; offset += buffer.Length)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = (int)Math.Min(buffer.Length, archiveLength - offset);
+            source.Position = offset;
+            await source.ReadExactlyAsync(buffer.AsMemory(0, count), cancellationToken)
+                .ConfigureAwait(false);
+            target.Position = offset;
+            await target.WriteAsync(buffer.AsMemory(0, count), cancellationToken)
+                .ConfigureAwait(false);
+            await target.FlushAsync(cancellationToken).ConfigureAwait(false);
+            target.Flush(flushToDisk: true);
+            PunchSparseRange(source.SafeFileHandle, offset, count);
+        }
+
         await target.FlushAsync(cancellationToken).ConfigureAwait(false);
         target.Flush(flushToDisk: true);
     }
+
+    private const uint FsctlSetSparse = 0x000900C4;
+    private const uint FsctlSetZeroData = 0x000980C8;
+
+    private static void MarkSparse(SafeFileHandle handle)
+    {
+        if (!DeviceIoControl(handle, FsctlSetSparse, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero))
+        {
+            throw new IOException("无法启用大文件节省空间的写入方式。", new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+    }
+
+    private static void PunchSparseRange(SafeFileHandle handle, long offset, long length)
+    {
+        var range = new byte[sizeof(long) * 2];
+        BinaryPrimitives.WriteInt64LittleEndian(range.AsSpan(0, sizeof(long)), offset);
+        BinaryPrimitives.WriteInt64LittleEndian(range.AsSpan(sizeof(long), sizeof(long)), checked(offset + length));
+        if (!DeviceIoControl(handle, FsctlSetZeroData, range, (uint)range.Length, IntPtr.Zero, 0, out _, IntPtr.Zero))
+        {
+            throw new IOException("无法释放已复制的大文件临时空间。", new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        SafeFileHandle device,
+        uint controlCode,
+        IntPtr inputBuffer,
+        uint inputBufferSize,
+        IntPtr outputBuffer,
+        uint outputBufferSize,
+        out uint bytesReturned,
+        IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        SafeFileHandle device,
+        uint controlCode,
+        byte[] inputBuffer,
+        uint inputBufferSize,
+        IntPtr outputBuffer,
+        uint outputBufferSize,
+        out uint bytesReturned,
+        IntPtr overlapped);
 
     public static async Task ReplaceAlternateDataStreamAsync(
         string photoPath,
@@ -225,7 +300,7 @@ internal static class JpegArchiveContainer
     public static string GetAlternateDataStreamPath(string photoPath) =>
         Path.GetFullPath(photoPath) + ":" + AlternateStreamName;
 
-    public static string NormalizeOutputPath(string outputPath)
+    public static string NormalizeOutputPath(string outputPath, bool preferPhotoArchive = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         var fullPath = Path.GetFullPath(outputPath);
@@ -234,7 +309,10 @@ internal static class JpegArchiveContainer
             return fullPath;
         }
 
-        var extension = IsNtfsPath(fullPath) ? ".jpg" : ".nrenc";
+        // A JPEG outer container is opt-in. Without a selected cover image the
+        // caller must receive a normal, portable .nrenc archive even when the
+        // chosen name or destination happens to look like a photo path.
+        var extension = preferPhotoArchive && IsNtfsPath(fullPath) ? ".jpg" : ".nrenc";
         return string.Equals(Path.GetExtension(fullPath), ".jpg", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(Path.GetExtension(fullPath), ".jpeg", StringComparison.OrdinalIgnoreCase)
             ? Path.ChangeExtension(fullPath, extension)

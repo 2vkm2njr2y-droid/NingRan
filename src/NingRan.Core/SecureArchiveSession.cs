@@ -9,12 +9,12 @@ namespace NingRan.Core;
 /// </summary>
 public sealed class SecureArchiveSession : IDisposable
 {
-    private readonly FileStream _input;
+    private readonly Stream _input;
     private readonly ArchiveHeader _header;
     private byte[]? _dataKey;
     private readonly SensitiveMemoryLock _dataKeyMemory;
     private readonly IndexedPayloadContainer.IndexedPayload _payload;
-    private readonly PhysicalDeviceUnlock? _physicalUnlock;
+    private readonly IReadOnlyList<PhysicalDeviceUnlock> _physicalUnlocks;
     private readonly PhysicalDeviceMonitor? _physicalMonitor;
     private readonly Dictionary<string, IndexedPayloadContainer.IndexedPayloadEntry> _entries;
     private readonly long _archiveOffset;
@@ -24,7 +24,7 @@ public sealed class SecureArchiveSession : IDisposable
     private bool _disposed;
 
     internal SecureArchiveSession(
-        FileStream input,
+        Stream input,
         ArchiveHeader header,
         byte[] dataKey,
         IndexedPayloadContainer.IndexedPayload payload,
@@ -38,14 +38,16 @@ public sealed class SecureArchiveSession : IDisposable
         long incrementalBaseLength = 0,
         long incrementalNextBlockIndex = 0,
         long incrementalGeneration = 0,
-        long incrementalLastSegmentStart = -1)
+        long incrementalLastSegmentStart = -1,
+        bool isReadOnly = false,
+        IReadOnlyList<PhysicalDeviceUnlock>? physicalUnlocks = null)
     {
         _input = input;
         _header = header;
         _dataKey = dataKey;
         _dataKeyMemory = SensitiveMemoryLock.Create(dataKey);
         _payload = payload;
-        _physicalUnlock = physicalUnlock;
+        _physicalUnlocks = physicalUnlocks ?? (physicalUnlock is null ? [] : [physicalUnlock]);
         _physicalMonitor = physicalMonitor;
         VerifiedSenderName = verifiedSenderName;
         SenderIsTrusted = senderIsTrusted;
@@ -56,6 +58,7 @@ public sealed class SecureArchiveSession : IDisposable
         IncrementalNextBlockIndex = incrementalNextBlockIndex;
         IncrementalGeneration = incrementalGeneration;
         IncrementalLastSegmentStart = incrementalLastSegmentStart;
+        IsReadOnly = isReadOnly;
         _entries = payload.Entries.ToDictionary(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase);
         Entries = payload.Entries.Select(entry => new SecureArchiveEntry(
             entry.RelativePath,
@@ -75,6 +78,7 @@ public sealed class SecureArchiveSession : IDisposable
     public EncryptionMode Mode => _header.Mode;
     public string ArchivePath { get; }
     public bool IsOpen => !_disposed;
+    public bool IsReadOnly { get; }
     public string VerifiedSenderName { get; }
     public bool SenderIsTrusted { get; }
     public IReadOnlyList<SecureArchiveEntry> Entries { get; }
@@ -86,7 +90,8 @@ public sealed class SecureArchiveSession : IDisposable
     public CancellationToken CancellationToken => _sessionCancellation.Token;
     internal long ArchiveOffset => _archiveOffset;
     internal long ArchiveLength => _archiveLength;
-    internal FileStream ArchiveFile => _input;
+    internal FileStream ArchiveFile => _input as FileStream
+        ?? throw new NingRanException("分片安全查看不支持修改加密包。");
     internal ArchiveHeader Header => _header;
     internal byte[] DataKey => _dataKey ?? throw new ObjectDisposedException(nameof(SecureArchiveSession));
     internal IndexedPayloadContainer.IndexedPayload Payload => _payload;
@@ -570,7 +575,7 @@ public sealed class SecureArchiveSession : IDisposable
             _physicalMonitor.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
 
-        _physicalUnlock?.Dispose();
+        foreach (var unlock in _physicalUnlocks) unlock.Dispose();
         _expirationTimer?.Dispose();
         _expirationTimer = null;
         _sessionCancellation.Cancel();
@@ -587,6 +592,10 @@ public sealed class SecureArchiveSession : IDisposable
         CryptographicOperations.ZeroMemory(_header.Bytes);
         CryptographicOperations.ZeroMemory(_header.PayloadNoncePrefix);
         CryptographicOperations.ZeroMemory(_header.HeaderHash);
+        foreach (var lookupHash in _header.ForbiddenPhysicalLookupHashes)
+        {
+            CryptographicOperations.ZeroMemory(lookupHash);
+        }
     }
 
     internal void EnsureContentAccessAllowed()

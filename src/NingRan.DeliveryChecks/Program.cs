@@ -162,6 +162,16 @@ internal static class Program
                !MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Video, defaults, externalViewersBlocked: true),
             "严格防护开启时仍可能启动外部查看器。");
 
+        var defaultProgram = new MediaPlayerPreferences { AudioVideoPlayer = AudioVideoPlayerChoice.DefaultProgram };
+        defaultProgram.Save(settingsPath);
+        var defaultLoaded = MediaPlayerPreferences.Load(settingsPath);
+        Assert(defaultLoaded.AudioVideoPlayer == AudioVideoPlayerChoice.DefaultProgram &&
+               MediaPlayerSelection.ShouldUseDefaultProgram(defaultLoaded),
+            "默认程序打开选择没有被保存并重新读取。");
+        Assert(!MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Image, defaultLoaded, externalViewersBlocked: false) &&
+               !MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Audio, defaultLoaded, externalViewersBlocked: false),
+            "选择默认程序打开后仍会把媒体交给凝然外部播放器。");
+
         File.WriteAllText(settingsPath, "{broken setting");
         Assert(MediaPlayerPreferences.Load(settingsPath).AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer,
             "播放器设置损坏后没有安全恢复到原有默认行为。");
@@ -171,11 +181,12 @@ internal static class Program
         {
             var content = dialog.Content as FrameworkElement
                 ?? throw new InvalidOperationException("播放器设置窗口缺少可测量的内容区域。");
-            content.Measure(new Size(600, 430));
-            content.Arrange(new Rect(0, 0, 600, 430));
+            content.Measure(new Size(600, 545));
+            content.Arrange(new Rect(0, 0, 600, 545));
             content.UpdateLayout();
             Assert(dialog.NingRanPlayerRadio.ActualWidth > 100 &&
                    dialog.BuiltInPlayerRadio.ActualWidth > 100 &&
+                   dialog.DefaultProgramRadio.ActualWidth > 100 &&
                    dialog.SaveChoiceButton.ActualWidth > 0,
                 "播放器设置窗口的选择项或保存按钮没有正常布局。");
         }

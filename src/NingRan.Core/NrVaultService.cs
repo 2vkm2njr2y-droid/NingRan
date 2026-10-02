@@ -69,7 +69,8 @@ public sealed class NrVaultService
     {
         ArgumentNullException.ThrowIfNull(request);
         WindowsFileSystemSafety.ThrowIfProcessIsElevated();
-        PasswordRules.ValidateForCreation(request.Password);
+        if (request.Mode != EncryptionMode.Flexible || request.ProtectionPolicy?.Requires(ProtectionFactor.Password) == true)
+            PasswordRules.ValidateForCreation(request.Password);
         ValidateMode(request.Mode, request.KeyFilePath, request.PhysicalDevices);
         var finalPath = VaultFormat.NormalizeVaultPath(request.VaultPath);
         if (Directory.Exists(finalPath) || File.Exists(finalPath))
@@ -94,7 +95,28 @@ public sealed class NrVaultService
         try
         {
             progress?.Report(new CryptoProgress(CryptoStage.DerivingKey, 0, 1, "正在保护保险箱数据钥匙…"));
-            if (request.Mode == EncryptionMode.Advanced)
+            if (request.Mode == EncryptionMode.Flexible)
+            {
+                if (request.ProtectionPolicy is null)
+                    throw new NingRanException("新组合保护格式缺少解锁规则。 ");
+                if (request.ProtectionPolicy.Requires(ProtectionFactor.KeyFile))
+                {
+                    keyFileSecret = await _keyFileService.UnlockAsync(
+                        request.KeyFilePath!, request.Password, cancellationToken).ConfigureAwait(false);
+                }
+                var flexible = await FlexibleArchiveHeader.CreateAsync(
+                    request.Password,
+                    keyFileSecret?.Memory ?? ReadOnlyMemory<byte>.Empty,
+                    request.ProtectionPolicy,
+                    _kdfParameters,
+                    _physicalDeviceProvider,
+                    request.OwnerWindowHandle,
+                    cancellationToken).ConfigureAwait(false);
+                keyHeader = flexible.Header;
+                dataKey = flexible.DataKey;
+                physicalUnlocks = flexible.Unlocks;
+            }
+            else if (request.Mode == EncryptionMode.Advanced)
             {
                 keyFileSecret = await _keyFileService.UnlockAsync(
                     request.KeyFilePath!, request.Password, cancellationToken).ConfigureAwait(false);
@@ -113,7 +135,7 @@ public sealed class NrVaultService
                 dataKey = physical.DataKey;
                 physicalUnlocks = physical.Unlocks;
             }
-            else
+            else if (request.Mode != EncryptionMode.Flexible)
             {
                 var createdHeader = await ArchiveHeader.CreateAsync(
                     request.Password,
@@ -179,8 +201,8 @@ public sealed class NrVaultService
                 temporaryPath,
                 temporaryInfo,
                 capacity,
-                keyHeader.Bytes,
-                decoyKeyHeader.Bytes,
+                (keyHeader ?? throw new NingRanException("保险箱保护头未建立。 ")).Bytes,
+                (decoyKeyHeader ?? throw new NingRanException("保险箱备用保护头未建立。 ")).Bytes,
                 (amount, message) =>
                 {
                     completed = checked(completed + amount);
@@ -1238,6 +1260,10 @@ public sealed class NrVaultService
         CryptographicOperations.ZeroMemory(header.Bytes);
         CryptographicOperations.ZeroMemory(header.PayloadNoncePrefix);
         CryptographicOperations.ZeroMemory(header.HeaderHash);
+        foreach (var lookupHash in header.ForbiddenPhysicalLookupHashes)
+        {
+            CryptographicOperations.ZeroMemory(lookupHash);
+        }
     }
 
     private static void ValidateMode(
@@ -1253,7 +1279,7 @@ public sealed class NrVaultService
         {
             throw new NingRanException("密码加物理设备方式必须至少选择一个已登记设备。");
         }
-        if (mode is not (EncryptionMode.Standard or EncryptionMode.Advanced or EncryptionMode.PhysicalDevice))
+        if (mode is not (EncryptionMode.Standard or EncryptionMode.Advanced or EncryptionMode.PhysicalDevice or EncryptionMode.Flexible))
         {
             throw new NingRanException("不支持所选的保险箱保护方式。");
         }

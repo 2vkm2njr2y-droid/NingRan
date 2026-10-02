@@ -3,15 +3,18 @@ namespace NingRan.Core.Internal;
 internal sealed class PhysicalDeviceMonitor : IAsyncDisposable
 {
     private readonly IReadOnlyList<PhysicalDeviceUnlock> _unlocks;
+    private readonly Func<bool>? _forbiddenPresent;
     private readonly CancellationTokenSource _stop = new();
     private readonly CancellationTokenSource _linked;
     private readonly Task _monitorTask;
 
     public PhysicalDeviceMonitor(
         IReadOnlyList<PhysicalDeviceUnlock> unlocks,
-        CancellationToken operationCancellation)
+        CancellationToken operationCancellation,
+        Func<bool>? forbiddenPresent = null)
     {
         _unlocks = unlocks;
+        _forbiddenPresent = forbiddenPresent;
         _linked = CancellationTokenSource.CreateLinkedTokenSource(operationCancellation, _stop.Token);
         _monitorTask = MonitorAsync(operationCancellation);
     }
@@ -24,7 +27,7 @@ internal sealed class PhysicalDeviceMonitor : IAsyncDisposable
     {
         if (DeviceLost)
         {
-            throw new NingRanException("授权物理设备已被拔出或发生变化，操作已经取消，未完成内容将被清理。 ");
+            throw new NingRanException("物理密匙不再满足解锁规则，操作已经取消，未完成内容将被清理。 ");
         }
     }
 
@@ -47,6 +50,12 @@ internal sealed class PhysicalDeviceMonitor : IAsyncDisposable
     {
         while (!_stop.IsCancellationRequested && !operationCancellation.IsCancellationRequested)
         {
+            if (_forbiddenPresent?.Invoke() == true)
+            {
+                DeviceLost = true;
+                _linked.Cancel();
+                return;
+            }
             foreach (var unlock in _unlocks)
             {
                 if (!unlock.IsPresent)

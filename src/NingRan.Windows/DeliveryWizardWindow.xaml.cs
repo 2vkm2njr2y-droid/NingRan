@@ -19,6 +19,7 @@ public partial class DeliveryWizardWindow : Window
     private int _page;
     private string? _createdPath;
     private string? _receiverInstructions;
+    private WindowsHelloCredential? _windowsHelloCredential;
 
     public DeliveryWizardWindow()
         : this(loadChoices: true)
@@ -131,12 +132,28 @@ public partial class DeliveryWizardWindow : Window
         if (KeyFilePanel is null || PhysicalDevicePanel is null) return;
         KeyFilePanel.Visibility = ProtectionModeCombo.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         PhysicalDevicePanel.Visibility = ProtectionModeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        WindowsHelloPanel.Visibility = ProtectionModeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void PickKeyFile_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog { Title = "选择密匙文件", CheckFileExists = true };
         if (dialog.ShowDialog(this) == true) KeyFilePathInput.Text = dialog.FileName;
+    }
+
+    private async void RegisterWindowsHello_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _windowsHelloCredential = await _physicalDeviceService.RegisterWindowsHelloAsync(
+                new WindowInteropHelper(this).Handle, CancellationToken.None);
+            WindowsHelloText.Text = "Windows Hello 已登记。它只能在登记的本机和当前 Windows 账户使用；交付密码仍可用于恢复。";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, $"Windows Hello 登记失败：\n\n{exception.Message}", Title,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void PickOutput_Click(object sender, RoutedEventArgs e)
@@ -250,6 +267,12 @@ public partial class DeliveryWizardWindow : Window
                     ShowNotice("请至少选择一个已经登记的物理设备。");
                     return false;
                 }
+
+                if (ProtectionModeCombo.SelectedIndex == 3 && _windowsHelloCredential is null)
+                {
+                    ShowNotice("请先登记本机 Windows Hello。请注意它只能在本机本账户使用。");
+                    return false;
+                }
                 break;
             case 4:
                 if (string.IsNullOrWhiteSpace(OutputPathInput.Text))
@@ -299,6 +322,7 @@ public partial class DeliveryWizardWindow : Window
         {
             1 => "密码＋密匙文件",
             2 => "密码＋物理设备",
+            3 => "密码＋Windows Hello",
             _ => "只使用密码",
         };
         ReviewText.Text =
@@ -358,8 +382,15 @@ public partial class DeliveryWizardWindow : Window
         {
             1 => EncryptionMode.Advanced,
             2 => EncryptionMode.PhysicalDevice,
+            3 => EncryptionMode.Flexible,
             _ => EncryptionMode.Standard,
         };
+        var policy = mode == EncryptionMode.Flexible
+            ? new ProtectionPolicy(
+                ProtectionFactor.Password | ProtectionFactor.WindowsHello,
+                windowsHello: _windowsHelloCredential,
+                recoveryFactors: ProtectionFactor.Password)
+            : null;
         var devices = PhysicalDeviceList.SelectedItems.Cast<PhysicalDeviceDescriptor>().ToArray();
         using var request = new EncryptRequest(
             _sources,
@@ -373,7 +404,8 @@ public partial class DeliveryWizardWindow : Window
             identity.Id,
             signingPassword,
             mode == EncryptionMode.PhysicalDevice ? devices : null,
-            new WindowInteropHelper(this).Handle);
+            new WindowInteropHelper(this).Handle,
+            policy);
 
         using var cancellation = new CancellationTokenSource();
         var progressWindow = new ProgressWindow(true, "正在生成安全交付包") { Owner = this };

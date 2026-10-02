@@ -3,8 +3,13 @@ using System.Security.Cryptography;
 
 namespace NingRan.Core.Internal;
 
-internal sealed class ArchiveHeader
+internal sealed partial class ArchiveHeader
 {
+    internal sealed record UnlockResult(
+        ArchiveHeader Header,
+        byte[] DataKey,
+        PhysicalDeviceUnlock? PhysicalUnlock,
+        IReadOnlyList<PhysicalDeviceUnlock> PhysicalUnlocks);
     private static ReadOnlySpan<byte> Magic => "NRARC008"u8;
     private const int PrefixSize = 56;
     private const int PasswordSlotSize = 12 + KeyDerivation.KeySize + CryptoSizes.Tag;
@@ -15,20 +20,32 @@ internal sealed class ArchiveHeader
     private const int MaxPhysicalDevices = 16;
     private const int HeaderSize = PhysicalSlotsOffset + (MaxPhysicalDevices * PhysicalSlotSize);
 
-    private ArchiveHeader(byte[] bytes, EncryptionMode mode)
+    internal ArchiveHeader(
+        byte[] bytes,
+        EncryptionMode mode,
+        ProtectionPolicy? policy = null,
+        IReadOnlyList<byte[]>? forbiddenPhysicalLookupHashes = null)
     {
         Bytes = bytes;
         Mode = mode;
+        Policy = policy;
+        ForbiddenPhysicalLookupHashes = forbiddenPhysicalLookupHashes ?? [];
         PayloadNoncePrefix = bytes.AsSpan(40, 4).ToArray();
-        HeaderHash = SHA256.HashData(bytes);
+        HeaderHash = mode == EncryptionMode.Flexible
+            ? FlexibleArchiveHeader.ComputePayloadHeaderHash(bytes)
+            : SHA256.HashData(bytes);
     }
 
     public byte[] Bytes { get; }
     public EncryptionMode Mode { get; }
+    public ProtectionPolicy? Policy { get; }
+    public IReadOnlyList<byte[]> ForbiddenPhysicalLookupHashes { get; }
+    public bool IsFlexible => Mode == EncryptionMode.Flexible;
     public byte[] PayloadNoncePrefix { get; }
     public byte[] HeaderHash { get; }
 
-    public static bool IsMagic(ReadOnlySpan<byte> magic) => magic.SequenceEqual(Magic);
+    public static bool IsMagic(ReadOnlySpan<byte> magic) =>
+        magic.SequenceEqual(Magic) || magic.SequenceEqual(FlexibleArchiveHeader.FlexibleMagic);
 
     public static async Task InspectAsync(Stream stream, CancellationToken cancellationToken)
     {
@@ -176,10 +193,7 @@ internal sealed class ArchiveHeader
         }
     }
 
-    public static async Task<(
-        ArchiveHeader Header,
-        byte[] DataKey,
-        PhysicalDeviceUnlock? PhysicalUnlock)> ReadAndUnlockAsync(
+    public static async Task<UnlockResult> ReadAndUnlockAsync(
         Stream stream,
         SensitivePassword password,
         ReadOnlyMemory<byte> keyFileSecret,
@@ -189,6 +203,30 @@ internal sealed class ArchiveHeader
         EncryptionMode? expectedMode = null)
     {
         var bytes = await ReadHeaderBytesAsync(stream, cancellationToken).ConfigureAwait(false);
+        if (bytes.AsSpan(0, FlexibleArchiveHeader.FlexibleMagic.Length)
+            .SequenceEqual(FlexibleArchiveHeader.FlexibleMagic))
+        {
+            stream.Position = 0;
+            try
+            {
+                var flexible = await FlexibleArchiveHeader.ReadAndUnlockAsync(
+                    stream,
+                    password,
+                    keyFileSecret,
+                    deviceProvider,
+                    ownerWindowHandle,
+                    cancellationToken).ConfigureAwait(false);
+                return new UnlockResult(
+                    flexible.Header,
+                    flexible.DataKey,
+                    flexible.Unlocks.FirstOrDefault(),
+                    flexible.Unlocks);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+            }
+        }
         var kdfParameters = ReadKdfParameters(bytes);
         byte[]? passwordKey = null;
         try
@@ -205,7 +243,7 @@ internal sealed class ArchiveHeader
                     if (TryDecryptPasswordSlot(
                             bytes, StandardSlotOffset, EncryptionMode.Standard, standardKey, out var dataKey))
                     {
-                        return (new ArchiveHeader(bytes, EncryptionMode.Standard), dataKey, null);
+                        return new UnlockResult(new ArchiveHeader(bytes, EncryptionMode.Standard), dataKey, null, []);
                     }
                 }
                 finally
@@ -229,7 +267,7 @@ internal sealed class ArchiveHeader
                     if (TryDecryptPasswordSlot(
                             bytes, AdvancedSlotOffset, EncryptionMode.Advanced, advancedKey, out var dataKey))
                     {
-                        return (new ArchiveHeader(bytes, EncryptionMode.Advanced), dataKey, null);
+                        return new UnlockResult(new ArchiveHeader(bytes, EncryptionMode.Advanced), dataKey, null, []);
                     }
                 }
                 finally
@@ -280,7 +318,7 @@ internal sealed class ArchiveHeader
                     {
                         if (TryDecryptPhysicalSlot(bytes, slotIndex, physicalKey, out var dataKey))
                         {
-                            return (new ArchiveHeader(bytes, EncryptionMode.PhysicalDevice), dataKey, unlock);
+                            return new UnlockResult(new ArchiveHeader(bytes, EncryptionMode.PhysicalDevice), dataKey, unlock, [unlock]);
                         }
 
                         unlock.Dispose();
@@ -328,17 +366,37 @@ internal sealed class ArchiveHeader
 
     private static async Task<byte[]> ReadHeaderBytesAsync(Stream stream, CancellationToken cancellationToken)
     {
-        var bytes = new byte[HeaderSize];
+        var prefix = new byte[12];
         try
         {
-            await BinaryFormat.ReadExactlyAsync(stream, bytes, cancellationToken).ConfigureAwait(false);
+            await BinaryFormat.ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false);
+            var isFlexible = prefix.AsSpan(0, 8).SequenceEqual(FlexibleArchiveHeader.FlexibleMagic);
+            var length = isFlexible
+                ? BinaryPrimitives.ReadInt32LittleEndian(prefix.AsSpan(8, 4))
+                : HeaderSize;
+            if (length < 56 || length > 1024 * 1024)
+                throw new NingRanException("加密文件头大小不正确。 ");
+
+            var bytes = new byte[length];
+            prefix.CopyTo(bytes, 0);
+            await BinaryFormat.ReadExactlyAsync(stream, bytes.AsMemory(12), cancellationToken).ConfigureAwait(false);
+            if (isFlexible)
+                return FlexibleArchiveHeader.ValidateAndReturn(bytes);
+
+            ValidateLegacyHeader(bytes);
+            return bytes;
         }
         catch (EndOfStreamException exception)
         {
             throw new NingRanException("这不是完整的凝然加密文件。", exception);
         }
 
+    }
+
+    private static void ValidateLegacyHeader(byte[] bytes)
+    {
         if (!bytes.AsSpan(0, Magic.Length).SequenceEqual(Magic) ||
+            bytes.Length != HeaderSize ||
             BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(8, 4)) != HeaderSize ||
             bytes.AsSpan(44, 12).IndexOfAnyExcept((byte)0) >= 0)
         {
@@ -347,7 +405,6 @@ internal sealed class ArchiveHeader
         }
 
         _ = ReadKdfParameters(bytes);
-        return bytes;
     }
 
     private static KdfParameters ReadKdfParameters(byte[] bytes)

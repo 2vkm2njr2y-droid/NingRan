@@ -51,6 +51,7 @@ public static class ShellIntegration
     private static readonly AssociationDefinition[] Associations =
     [
         new(".nrenc", "NingRan.EncryptedFile", "凝然加密文件", @"Assets\EncryptedFileIcon.ico", "NingRan encrypted file"),
+        new(".nrsplit", "NingRan.EncryptedSplitFile", "凝然分片加密文件", @"Assets\EncryptedFileIcon.ico", "NingRan split encrypted file"),
         new(".nrid", "NingRan.IdentityBackup", "凝然身份备份", @"Assets\IdentityBackupIcon.ico", "NingRan identity backup"),
         new(".nrpub", "NingRan.PublicIdentity", "凝然公开身份", @"Assets\PublicIdentityIcon.ico", "NingRan public identity"),
     ];
