@@ -155,9 +155,9 @@ internal static class Program
         Assert(!MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Audio, loaded, externalViewersBlocked: false) &&
                !MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Video, loaded, externalViewersBlocked: false),
             "选择内置播放器后仍会把音频或视频交给外部播放器。");
-        Assert(MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Image, loaded, externalViewersBlocked: false) &&
-               MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Pdf, loaded, externalViewersBlocked: false),
-            "播放器选择错误改变了图片或 PDF 的原有打开方式。");
+        Assert(!MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Image, loaded, externalViewersBlocked: false) &&
+               !MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Pdf, loaded, externalViewersBlocked: false),
+            "选择内置播放器后仍会把图片或 PDF 交给凝然外部播放器。");
         Assert(!MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Image, defaults, externalViewersBlocked: true) &&
                !MediaPlayerSelection.ShouldUseExternalViewer(SecureMediaKind.Video, defaults, externalViewersBlocked: true),
             "严格防护开启时仍可能启动外部查看器。");
@@ -814,7 +814,7 @@ internal static class Program
             var help = new HelpWindow();
             try
             {
-                var helpText = help.VaultText.Text;
+                var helpText = help.GetTopicTextForChecks("vault");
                 Assert(UiLanguage.IsEnglish
                         ? helpText.Contains("Create concealed space", StringComparison.Ordinal) &&
                           helpText.Contains("cannot guarantee", StringComparison.OrdinalIgnoreCase) &&

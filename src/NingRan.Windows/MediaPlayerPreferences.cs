@@ -71,7 +71,8 @@ internal static class MediaPlayerSelection
         if (externalViewersBlocked || ShouldUseDefaultProgram(preferences)) return false;
         return mediaKind switch
         {
-            SecureMediaKind.Image or SecureMediaKind.Pdf => true,
+            SecureMediaKind.Image or SecureMediaKind.Pdf =>
+                preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer,
             SecureMediaKind.Audio or SecureMediaKind.Video =>
                 preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer,
             _ => false,
@@ -85,9 +86,8 @@ internal static class MediaPlayerSelection
         SecureMediaKind? mediaKind,
         MediaPlayerPreferences preferences) =>
         !ShouldUseDefaultProgram(preferences) &&
-        (mediaKind is SecureMediaKind.Image or SecureMediaKind.Pdf ||
-        mediaKind is SecureMediaKind.Audio or SecureMediaKind.Video &&
-        preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer);
+        mediaKind is not null &&
+        preferences.AudioVideoPlayer == AudioVideoPlayerChoice.NingRanPlayer;
 
     public static bool IsPreferredExternalAudioVideo(
         SecureMediaKind? mediaKind,

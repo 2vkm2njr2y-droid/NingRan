@@ -23,7 +23,7 @@
             <StackPanel>
                 <RadioButton x:Name="NingRanPlayerRadio" GroupName="PlayerChoice"
                              Content="凝然播放器（推荐）" FontSize="15" FontWeight="SemiBold" />
-                <TextBlock Text="使用单独安装的凝然播放器。未安装或连接失败时，会自动改用内置播放器。"
+                <TextBlock Text="使用单独安装的凝然播放器查看音频、视频、图片和 PDF。未安装或连接失败时会提示并停止，不会改用其他查看方式。"
                            Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="25,7,0,0" />
                 <TextBlock x:Name="ExternalPlayerStatusText" Foreground="{StaticResource PrimaryBrush}"
                            FontSize="12" Margin="25,7,0,0" />
@@ -35,7 +35,7 @@
             <StackPanel>
                 <RadioButton x:Name="BuiltInPlayerRadio" GroupName="PlayerChoice"
                              Content="内置播放器" FontSize="15" FontWeight="SemiBold" />
-                <TextBlock Text="直接在凝然加密窗口中播放。"
+                <TextBlock Text="直接在凝然加密窗口中查看或播放音频、视频、图片和 PDF。"
                            Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="25,7,0,0" />
             </StackPanel>
         </Border>

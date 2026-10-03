@@ -360,23 +360,18 @@ public sealed class SecureArchiveSession : IDisposable
                             selectedIsDirectory && entry.RelativePath.StartsWith(selectedPath + "/", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         var name = PathSafety.ValidateNameSegment(outputName ?? Path.GetFileName(selectedPath));
-        var totalBlocks = Math.Max(_payload.TotalBlockCount, 1);
-        progress?.Report(new CryptoProgress(CryptoStage.Verifying, 0, totalBlocks, "正在完整验证加密内容，不创建文件…"));
-        await IndexedPayloadContainer.ValidateAllAsync(
-            _input,
-            _header,
-            _dataKey!,
-            _payload,
-            (completed, message) => progress?.Report(new CryptoProgress(CryptoStage.Verifying, completed, totalBlocks, message)),
-            token,
-            _archiveOffset).ConfigureAwait(false);
-
+        // 打开单个内部文件时，只读取并校验选中的分段；完整导出仍保留全包校验。
         var staging = SecureStagingArea.Create(destination);
         try
         {
             var directoryTimes = new List<(string Path, long Ticks)>();
             var totalBytes = Math.Max(selectedEntries.Where(entry => entry.Kind == PayloadEntryKind.File).Sum(entry => entry.Length), 1);
             long completed = 0;
+            progress?.Report(new CryptoProgress(
+                CryptoStage.Decrypting,
+                0,
+                totalBytes,
+                "正在读取所选内容…"));
             foreach (var entry in selectedEntries)
             {
                 token.ThrowIfCancellationRequested();

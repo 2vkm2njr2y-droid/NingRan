@@ -72,7 +72,7 @@
                         VerticalAlignment="Center" ToolTip="设置严格防护和允许的软件" />
                 <Button x:Name="MediaPlayerSettingsButton" Grid.Column="3" Content="播放器设置"
                         Click="MediaPlayerSettings_Click" Padding="12,6" Margin="0,0,10,0"
-                        VerticalAlignment="Center" ToolTip="选择音频和视频的打开方式" />
+                        VerticalAlignment="Center" ToolTip="选择媒体文件的打开方式" />
                 <Button Grid.Column="4" Content="历史记录" Click="RecentArchives_Click" Padding="12,6" Margin="0,0,10,0"
                         VerticalAlignment="Center" ToolTip="打开最近安全查看过的加密文件" />
                 <Button Grid.Column="5" Content="安全交付" Click="DeliveryButton_Click" Padding="12,6" Margin="0,0,10,0"
@@ -83,7 +83,7 @@
                         VerticalAlignment="Center" ToolTip="打开使用说明、隐私条件和免责声明" />
                 <Border Grid.Column="8" Background="#E3F2EC" CornerRadius="11" Padding="11,5"
                         Margin="0,0,14,0" VerticalAlignment="Center">
-                        <TextBlock Text="10.0.1" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
+                        <TextBlock Text="10.0.2" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
                 </Border>
                 <StackPanel Grid.Column="9" Orientation="Horizontal" Margin="0,0,13,0" VerticalAlignment="Center">
                     <Button Style="{StaticResource TitleButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="最小化" />

@@ -5,10 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>NingRan.GeneralFileBridge</AssemblyName>
-    <Version>10.0.1</Version>
-    <AssemblyVersion>10.0.1.0</AssemblyVersion>
-    <FileVersion>10.0.1.0</FileVersion>
-    <InformationalVersion>10.0.1</InformationalVersion>
+    <Version>10.0.2</Version>
+    <AssemblyVersion>10.0.2.0</AssemblyVersion>
+    <FileVersion>10.0.2.0</FileVersion>
+    <InformationalVersion>10.0.2</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup>

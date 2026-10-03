@@ -61,7 +61,7 @@
         "dependencies": {
           "LibVLCSharp.WPF": "[3.10.1, )",
           "Microsoft.Web.WebView2": "[1.0.4129.50, )",
-          "NingRan.Core": "[10.0.1, )",
+          "NingRan.Core": "[10.0.2, )",
           "VideoLAN.LibVLC.Windows": "[3.0.23.1, )",
           "winfsp.net": "[2.2.26215, )"
         }

@@ -1774,9 +1774,13 @@ public partial class MainWindow : Window
                 catch (Exception exception)
                 {
                     ShowFriendlyError("无法使用系统默认程序打开", exception);
-                    // 继续下面原有的凝然内部查看或导出流程。
+                    // 用户已经明确选择系统默认程序；失败时不能偷偷改用凝然查看器。
+                    return;
                 }
             }
+
+            // 严格防护下用户拒绝把明文交给系统默认程序时，也不能改用凝然查看器。
+            return;
         }
 
         if (entry.MediaKind is not null)
@@ -1827,11 +1831,10 @@ public partial class MainWindow : Window
             {
                 var launch = await TryOpenWithExternalMediaViewerAsync(externalMediaEntries, entry);
                 if (launch.Started) return;
-                if (!string.Equals(launch.ProblemId, "viewer-not-found", StringComparison.Ordinal) ||
-                    MediaPlayerSelection.IsPreferredExternalAudioVideo(entry.MediaKind, _mediaPlayerPreferences))
-                {
-                    ShowExternalMediaViewerFailure(launch);
-                }
+                // The selected route is authoritative. A failed NingRan Player
+                // launch must stop instead of silently switching to the built-in viewer.
+                ShowExternalMediaViewerFailure(launch);
+                return;
             }
             if (entry.MediaKind == SecureMediaKind.Pdf)
             {
@@ -2959,19 +2962,19 @@ public partial class MainWindow : Window
 
         MediaPlayerSettingsButton.ToolTip = _strictProtection.IsRunning
             ? UiLanguage.IsEnglish
-                ? "Strict Protection is on, so audio and video currently use the built-in player."
-                : "严格防护已开启，音频和视频当前使用内置播放器。"
+                ? "Strict Protection is on, so media currently uses the built-in viewer."
+                : "严格防护已开启，媒体当前使用内置查看器。"
             : MediaPlayerSelection.ShouldUseDefaultProgram(_mediaPlayerPreferences)
                 ? UiLanguage.IsEnglish
                     ? "Double-clicked files are opened with the Windows default program."
                     : "双击文件时使用 Windows 默认程序打开。"
             : _mediaPlayerPreferences.AudioVideoPlayer == AudioVideoPlayerChoice.BuiltInPlayer
                 ? UiLanguage.IsEnglish
-                    ? "Audio and video currently use the built-in player."
-                    : "音频和视频当前使用内置播放器。"
+                    ? "Audio, video, images, and PDFs currently use the built-in viewer."
+                    : "音频、视频、图片和 PDF 当前使用内置查看器。"
                 : UiLanguage.IsEnglish
-                    ? "Audio and video currently use NingRan Player."
-                    : "音频和视频当前使用凝然播放器。";
+                    ? "Audio, video, images, and PDFs currently use NingRan Player."
+                    : "音频、视频、图片和 PDF 当前使用凝然播放器。";
     }
 
     private async Task ObserveExternalMediaViewerAsync(MediaPlaybackHost host, string fileName)

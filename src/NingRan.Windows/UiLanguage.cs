@@ -52,7 +52,8 @@ internal static class UiLanguage
     public static string Translate(string? value)
     {
         if (!IsEnglish || string.IsNullOrEmpty(value)) return value ?? string.Empty;
-        return EnglishText.TryGetValue(value, out var translated) ? translated : value;
+        if (EnglishUiSupplement.Text.TryGetValue(value, out var translated)) return translated;
+        return EnglishText.TryGetValue(value, out translated) ? translated : value;
     }
 
     public static void Apply(Window window)

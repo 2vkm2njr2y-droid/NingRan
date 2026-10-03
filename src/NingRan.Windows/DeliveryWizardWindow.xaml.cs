@@ -44,7 +44,7 @@ public partial class DeliveryWizardWindow : Window
         }
         catch (Exception exception)
         {
-            MessageBox.Show(this, $"无法读取发送者身份：\n\n{exception.Message}", Title,
+            MessageBox.Show(this, UiLanguage.IsEnglish ? $"Could not read sender identities:\n\n{exception.Message}" : $"无法读取发送者身份：\n\n{exception.Message}", Title,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
@@ -59,7 +59,7 @@ public partial class DeliveryWizardWindow : Window
         {
             RecipientCombo.ItemsSource = new[] { new DeliveryContactChoice(null) };
             RecipientCombo.SelectedIndex = 0;
-            MessageBox.Show(this, $"无法读取可信联系人：\n\n{exception.Message}", Title,
+            MessageBox.Show(this, UiLanguage.IsEnglish ? $"Could not read trusted contacts:\n\n{exception.Message}" : $"无法读取可信联系人：\n\n{exception.Message}", Title,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
@@ -77,7 +77,7 @@ public partial class DeliveryWizardWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = "选择要安全交付的文件",
+            Title = UiLanguage.IsEnglish ? "Choose files for Secure Delivery" : "选择要安全交付的文件",
             Multiselect = true,
             CheckFileExists = true,
         };
@@ -89,7 +89,7 @@ public partial class DeliveryWizardWindow : Window
     {
         var dialog = new OpenFolderDialog
         {
-            Title = "选择要安全交付的文件夹",
+            Title = UiLanguage.IsEnglish ? "Choose folders for Secure Delivery" : "选择要安全交付的文件夹",
             Multiselect = true,
         };
         if (dialog.ShowDialog(this) != true) return;
@@ -123,8 +123,10 @@ public partial class DeliveryWizardWindow : Window
         var fileCount = _sources.Count(File.Exists);
         var folderCount = _sources.Count(Directory.Exists);
         SourceSummary.Text = _sources.Count == 0
-            ? "尚未选择资料。"
-            : $"已选择 {fileCount:N0} 个文件、{folderCount:N0} 个顶层文件夹。子文件夹和空文件夹会完整保留。";
+            ? UiLanguage.Translate("尚未选择资料。")
+            : UiLanguage.IsEnglish
+                ? $"Selected {fileCount:N0} file(s) and {folderCount:N0} top-level folder(s). Subfolders and empty folders are preserved."
+                : $"已选择 {fileCount:N0} 个文件、{folderCount:N0} 个顶层文件夹。子文件夹和空文件夹会完整保留。";
     }
 
     private void ProtectionMode_Changed(object sender, SelectionChangedEventArgs e)
@@ -137,7 +139,7 @@ public partial class DeliveryWizardWindow : Window
 
     private void PickKeyFile_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Title = "选择密匙文件", CheckFileExists = true };
+        var dialog = new OpenFileDialog { Title = UiLanguage.IsEnglish ? "Choose key file" : "选择密匙文件", CheckFileExists = true };
         if (dialog.ShowDialog(this) == true) KeyFilePathInput.Text = dialog.FileName;
     }
 
@@ -147,11 +149,13 @@ public partial class DeliveryWizardWindow : Window
         {
             _windowsHelloCredential = await _physicalDeviceService.RegisterWindowsHelloAsync(
                 new WindowInteropHelper(this).Handle, CancellationToken.None);
-            WindowsHelloText.Text = "Windows Hello 已登记。它只能在登记的本机和当前 Windows 账户使用；交付密码仍可用于恢复。";
+            WindowsHelloText.Text = UiLanguage.IsEnglish
+                ? "Windows Hello was registered. It works only on this computer and Windows account; the delivery password remains a recovery method."
+                : "Windows Hello 已登记。它只能在登记的本机和当前 Windows 账户使用；交付密码仍可用于恢复。";
         }
         catch (Exception exception)
         {
-            MessageBox.Show(this, $"Windows Hello 登记失败：\n\n{exception.Message}", Title,
+            MessageBox.Show(this, UiLanguage.IsEnglish ? $"Windows Hello registration failed:\n\n{exception.Message}" : $"Windows Hello 登记失败：\n\n{exception.Message}", Title,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -161,11 +165,11 @@ public partial class DeliveryWizardWindow : Window
         var suggested = MakeSafeFileName(DeliveryNameInput.Text);
         var dialog = new SaveFileDialog
         {
-            Title = "保存安全交付包",
-            Filter = "凝然安全交付包 (*.nrenc)|*.nrenc",
+            Title = UiLanguage.IsEnglish ? "Save Secure Delivery package" : "保存安全交付包",
+            Filter = UiLanguage.IsEnglish ? "NingRan Secure Delivery packages (*.nrenc)|*.nrenc" : "凝然安全交付包 (*.nrenc)|*.nrenc",
             DefaultExt = ".nrenc",
             AddExtension = true,
-            FileName = string.IsNullOrWhiteSpace(suggested) ? "安全交付.nrenc" : suggested + ".nrenc",
+            FileName = string.IsNullOrWhiteSpace(suggested) ? (UiLanguage.IsEnglish ? "Secure Delivery.nrenc" : "安全交付.nrenc") : suggested + ".nrenc",
         };
         if (dialog.ShowDialog(this) == true) OutputPathInput.Text = dialog.FileName;
     }
@@ -192,7 +196,7 @@ public partial class DeliveryWizardWindow : Window
                 {
                     DeliveryNameInput.Text = _sources.Count == 1
                         ? Path.GetFileName(_sources[0].TrimEnd(Path.DirectorySeparatorChar))
-                        : $"资料交付 {DateTime.Now:yyyy-MM-dd}";
+                        : (UiLanguage.IsEnglish ? $"Delivery {DateTime.Now:yyyy-MM-dd}" : $"资料交付 {DateTime.Now:yyyy-MM-dd}");
                 }
 
                 ShowPage(_page + 1);
@@ -203,7 +207,7 @@ public partial class DeliveryWizardWindow : Window
         }
         catch (Exception exception)
         {
-            MessageBox.Show(this, $"无法继续：\n\n{FriendlyMessage(exception)}", Title,
+            MessageBox.Show(this, UiLanguage.IsEnglish ? $"Could not continue:\n\n{FriendlyMessage(exception)}" : $"无法继续：\n\n{FriendlyMessage(exception)}", Title,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -305,11 +309,22 @@ public partial class DeliveryWizardWindow : Window
             "第 5 步，共 5 步：检查并生成",
             "生成完成",
         ];
-        StepTitle.Text = titles[page];
-        StepBadge.Text = page == 5 ? "完成" : $"{page + 1} / 5";
+        string[] englishTitles =
+        [
+            "Step 1 of 5: Choose content",
+            "Step 2 of 5: Enter delivery details",
+            "Step 3 of 5: Set password and protection",
+            "Step 4 of 5: Set expiry and export rules",
+            "Step 5 of 5: Review and create",
+            "Completed",
+        ];
+        StepTitle.Text = UiLanguage.IsEnglish ? englishTitles[page] : titles[page];
+        StepBadge.Text = page == 5 ? (UiLanguage.IsEnglish ? "Done" : "完成") : $"{page + 1} / 5";
         BackButton.Visibility = page is > 0 and < 5 ? Visibility.Visible : Visibility.Hidden;
         CancelButton.Visibility = page == 5 ? Visibility.Collapsed : Visibility.Visible;
-        NextButton.Content = page switch { 4 => "生成交付包", 5 => "完成", _ => "下一步" };
+        NextButton.Content = UiLanguage.IsEnglish
+            ? page switch { 4 => "Create package", 5 => "Done", _ => "Next" }
+            : page switch { 4 => "生成交付包", 5 => "完成", _ => "下一步" };
 
         if (page == 4) RefreshReview();
     }
@@ -325,14 +340,21 @@ public partial class DeliveryWizardWindow : Window
             3 => "密码＋Windows Hello",
             _ => "只使用密码",
         };
-        ReviewText.Text =
-            $"交付名称：{DeliveryNameInput.Text.Trim()}\r\n" +
-            $"资料：{_sources.Count:N0} 个顶层项目\r\n" +
-            $"接收对象：{recipient?.Name ?? "未指定"}\r\n" +
-            $"保护方式：{mode}\r\n" +
-            $"有效期：{(expires == 0 ? "永久有效" : expires + " 天")}\r\n" +
-            $"允许导出：{(AllowExportCheck.IsChecked == true ? "是" : "否")}\r\n\r\n" +
-            "生成前会检查所选资料、保存位置和可用空间；生成后会重新读取并完整验证交付包。原始资料不会被修改。";
+        ReviewText.Text = UiLanguage.IsEnglish
+            ? $"Delivery name: {DeliveryNameInput.Text.Trim()}\r\n" +
+              $"Content: {_sources.Count:N0} top-level item(s)\r\n" +
+              $"Recipient: {recipient?.Name ?? "Not specified"}\r\n" +
+              $"Protection: {UiLanguage.Translate(mode)}\r\n" +
+              $"Expiration: {(expires == 0 ? "No expiration" : $"{expires} days")}\r\n" +
+              $"Allow export: {(AllowExportCheck.IsChecked == true ? "Yes" : "No")}\r\n\r\n" +
+              "NingRan checks sources, destination, and free space before creating the package. It reopens and verifies the result. Original content is not changed."
+            : $"交付名称：{DeliveryNameInput.Text.Trim()}\r\n" +
+              $"资料：{_sources.Count:N0} 个顶层项目\r\n" +
+              $"接收对象：{recipient?.Name ?? "未指定"}\r\n" +
+              $"保护方式：{mode}\r\n" +
+              $"有效期：{(expires == 0 ? "永久有效" : expires + " 天")}\r\n" +
+              $"允许导出：{(AllowExportCheck.IsChecked == true ? "是" : "否")}\r\n\r\n" +
+              "生成前会检查所选资料、保存位置和可用空间；生成后会重新读取并完整验证交付包。原始资料不会被修改。";
     }
 
     private async Task GenerateAsync()
@@ -408,7 +430,7 @@ public partial class DeliveryWizardWindow : Window
             policy);
 
         using var cancellation = new CancellationTokenSource();
-        var progressWindow = new ProgressWindow(true, "正在生成安全交付包") { Owner = this };
+        var progressWindow = new ProgressWindow(true, UiLanguage.IsEnglish ? "Creating Secure Delivery package" : "正在生成安全交付包") { Owner = this };
         progressWindow.CancelRequested += (_, _) => cancellation.Cancel();
         var progress = new Progress<CryptoProgress>(progressWindow.UpdateProgress);
         IsEnabled = false;
@@ -421,11 +443,12 @@ public partial class DeliveryWizardWindow : Window
                 verificationPassed: true);
             OperationLog.Append("生成安全交付", result.ArchivePath, "成功",
                 $"顶层项目={_sources.Count}; 有效期={(days == 0 ? "永久" : days + "天")}; 允许导出={info.AllowExport}");
-            _receiverInstructions = "请安装凝然后打开此安全交付包，并使用我通过其他安全方式单独告知你的密码。";
-            ResultText.Text =
-                $"{Path.GetFileName(result.ArchivePath)}\n" +
-                $"{_sources.Count:N0} 个顶层项目；{(days == 0 ? "永久有效" : $"{days} 天有效")}；" +
-                $"{(info.AllowExport ? "允许导出" : "禁止导出")}。";
+            _receiverInstructions = UiLanguage.IsEnglish
+                ? "Install NingRan Encryption, open this Secure Delivery package, and use the password I provide separately through another secure channel."
+                : "请安装凝然后打开此安全交付包，并使用我通过其他安全方式单独告知你的密码。";
+            ResultText.Text = UiLanguage.IsEnglish
+                ? $"{Path.GetFileName(result.ArchivePath)}\n{_sources.Count:N0} top-level item(s); {(days == 0 ? "no expiration" : $"valid for {days} days")}; {(info.AllowExport ? "export allowed" : "export disabled")}."
+                : $"{Path.GetFileName(result.ArchivePath)}\n{_sources.Count:N0} 个顶层项目；{(days == 0 ? "永久有效" : $"{days} 天有效")}；{(info.AllowExport ? "允许导出" : "禁止导出")}。";
             ShowPage(5);
         }
         catch (OperationCanceledException)
@@ -508,7 +531,7 @@ public partial class DeliveryWizardWindow : Window
     {
         if (_receiverInstructions is null) return;
         Clipboard.SetText(_receiverInstructions);
-        MessageBox.Show(this, "接收说明已复制。请通过与交付包不同的安全方式告诉对方密码。", Title,
+        MessageBox.Show(this, UiLanguage.IsEnglish ? "Recipient instructions copied. Share the password through a different secure channel from the package." : "接收说明已复制。请通过与交付包不同的安全方式告诉对方密码。", Title,
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -529,6 +552,8 @@ public partial class DeliveryWizardWindow : Window
 
     private sealed record DeliveryContactChoice(TrustedContactSummary? Contact)
     {
-        public string DisplayText => Contact is null ? "不指定联系人，只使用密码交付" : $"{Contact.Name}（已确认）";
+        public string DisplayText => Contact is null
+            ? (UiLanguage.IsEnglish ? "No contact; deliver with password only" : "不指定联系人，只使用密码交付")
+            : UiLanguage.IsEnglish ? $"{Contact.Name} (verified)" : $"{Contact.Name}（已确认）";
     }
 }
