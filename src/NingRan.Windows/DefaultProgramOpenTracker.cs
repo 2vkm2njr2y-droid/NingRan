@@ -35,16 +35,16 @@ internal sealed class DefaultProgramOpenTracker
             var temporaryPath = exported.OutputPath;
             var originalLength = new FileInfo(temporaryPath).Length;
             var originalHash = ComputeHash(temporaryPath);
+            // ShellExecute 交给已经运行的单实例程序（例如 PotPlayer）时，Windows
+            // 可能已经成功把文件交给目标程序，却不会返回 Process 对象。
+            // 这里不能把 null 当成失败，否则 catch 会马上删除临时文件，目标程序
+            // 随后只能显示“找不到文件”。真正的启动失败会通过 Win32Exception 抛出。
             var process = Process.Start(new ProcessStartInfo
             {
                 FileName = temporaryPath,
                 UseShellExecute = true,
                 WorkingDirectory = Path.GetDirectoryName(temporaryPath) ?? directory,
             });
-            if (process is null)
-            {
-                throw new InvalidOperationException("Windows 没有启动默认程序。");
-            }
 
             var tracked = new DefaultProgramOpenFile(
                 session,
@@ -96,7 +96,7 @@ internal sealed class DefaultProgramOpenTracker
         {
             try
             {
-                if (!file.Process.HasExited)
+                if (file.Process is not null && !file.Process.HasExited)
                 {
                     file.Process.CloseMainWindow();
                     file.Process.WaitForExit(2_000);
@@ -105,7 +105,7 @@ internal sealed class DefaultProgramOpenTracker
             catch { }
             finally
             {
-                file.Process.Dispose();
+                file.Process?.Dispose();
             }
 
             TryDeleteDirectory(file.TemporaryDirectory);
@@ -142,4 +142,4 @@ internal sealed record DefaultProgramOpenFile(
     string TemporaryDirectory,
     long OriginalLength,
     byte[] OriginalHash,
-    Process Process);
+    Process? Process);
