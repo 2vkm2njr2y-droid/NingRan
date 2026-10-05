@@ -4,7 +4,7 @@
         Title="凝然加密 - 安全提醒" Width="600" Height="410"
         WindowStyle="None" AllowsTransparency="True" ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen" Background="Transparent" ShowInTaskbar="True">
-    <Border Margin="14" CornerRadius="22" Background="{StaticResource CardBrush}">
+    <Border Margin="14" CornerRadius="12" Background="{StaticResource CardBrush}">
         <Border.Effect>
             <DropShadowEffect BlurRadius="24" ShadowDepth="5" Opacity="0.22" Color="#245B49" />
         </Border.Effect>
@@ -15,7 +15,7 @@
                 <RowDefinition Height="76" />
             </Grid.RowDefinitions>
 
-            <Border Background="#168565" CornerRadius="22,22,0,0"
+            <Border Background="#117A63" CornerRadius="22,22,0,0"
                     MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
                 <Grid>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="22,0,0,0">

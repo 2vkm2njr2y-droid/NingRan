@@ -8,7 +8,8 @@ public sealed record ArchiveInfo(
     IReadOnlyList<PhysicalDeviceInfo>? PhysicalDevices = null,
     string FormatVersion = "6.0",
     long FileSize = 0,
-    DateTime CreatedAtLocal = default)
+    DateTime CreatedAtLocal = default,
+    ProtectionFactor? ProtectionFactors = null)
 {
     public IReadOnlyList<PhysicalDeviceInfo> RequiredPhysicalDevices => PhysicalDevices ?? [];
 }

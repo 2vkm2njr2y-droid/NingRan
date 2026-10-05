@@ -22,7 +22,7 @@
                 <TextBlock x:Name="TitleText" Text="凝然加密 · 安全媒体播放器" Foreground="{StaticResource TextBrush}" FontSize="17" FontWeight="SemiBold" />
                 <TextBlock x:Name="SubtitleText" Text="不保存明文，文件只在内存中按需读取" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
             </StackPanel>
-            <Border Grid.Column="2" Background="#E3F2EC" CornerRadius="10" Padding="11,6" Margin="0,0,22,0" VerticalAlignment="Center">
+            <Border Grid.Column="2" Background="#E9F4EF" CornerRadius="12" Padding="11,6" Margin="0,0,22,0" VerticalAlignment="Center">
                 <TextBlock Text="不保存明文" Foreground="{StaticResource PrimaryBrush}" FontWeight="SemiBold" />
             </Border>
         </Grid>
@@ -33,7 +33,7 @@
                 <ColumnDefinition Width="16" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Border x:Name="PlaylistPanel" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="16">
+            <Border x:Name="PlaylistPanel" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="16">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -54,7 +54,7 @@
                 </Grid>
             </Border>
 
-            <Border x:Name="MediaPanel" Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="15" Padding="18">
+            <Border x:Name="MediaPanel" Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="18">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="0" />
@@ -111,7 +111,7 @@
                                 <TextBlock x:Name="NativeMediaHint" Text="点击画面暂停或继续　← / → 调整播放进度　双击画面全屏" Visibility="Collapsed"
                                            Foreground="#B6C9BF" FontSize="13" Opacity="0.76"
                                            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,15,0,0" IsHitTestVisible="False" />
-                                <Border x:Name="NativePreviewPopup" Visibility="Collapsed" Background="#E8121816" CornerRadius="8"
+                                <Border x:Name="NativePreviewPopup" Visibility="Collapsed" Background="#E8121816" CornerRadius="12"
                                         Padding="5" Width="230" Height="151" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="18,0,0,0"
                                         IsHitTestVisible="False">
                                     <StackPanel>
@@ -154,7 +154,7 @@
                                                     <ControlTemplate TargetType="{x:Type Button}">
                                                         <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}"
                                                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                                                CornerRadius="7" Padding="{TemplateBinding Padding}">
+                                                                CornerRadius="12" Padding="{TemplateBinding Padding}">
                                                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                                                               RecognizesAccessKey="True" />
                                                         </Border>
@@ -206,7 +206,7 @@
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <Button Style="{StaticResource CompactMediaButton}" Content="⏮" Click="NativePrevious_Click" ToolTip="上一项" />
                                                 <Button Style="{StaticResource CompactMediaButton}" Content="↶ 10" Click="NativeBackTenSeconds_Click" ToolTip="后退 10 秒" />
-                                                <Border Width="42" Height="42" Background="#168565" BorderBrush="#64E0BD" BorderThickness="2" CornerRadius="21" Margin="5,0">
+                                                <Border Width="42" Height="42" Background="#117A63" BorderBrush="#64E0BD" BorderThickness="2" CornerRadius="21" Margin="5,0">
                                                     <Button x:Name="NativePlayButton" Content="▶" Click="NativePlayButton_Click" ToolTip="播放或暂停"
                                                             Style="{StaticResource CompactMediaButton}" Foreground="White" FontSize="18" Padding="0" />
                                                 </Border>

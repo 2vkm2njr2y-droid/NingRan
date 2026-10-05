@@ -17,7 +17,7 @@
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="14" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="10">
+            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="10">
                 <StackPanel>
                     <TextBlock Text="导航" FontSize="16" FontWeight="SemiBold" Margin="4,2,4,12" />
                     <Button x:Name="LocationNavButton" Content="保险箱位置" Click="NavigateLocation_Click" Margin="0,0,0,8" />
@@ -54,7 +54,7 @@
                             <Button x:Name="ClearSourcesButton" Content="清空选择" Click="ClearSources_Click" />
                         </WrapPanel>
                         <Border x:Name="HiddenSourcesPanel" Visibility="Collapsed" Background="#F5F8F7"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12"
                                 Padding="12" Margin="0,14,0,0">
                             <StackPanel>
                                 <TextBlock x:Name="HiddenSourcesTitle" Text="隐蔽空间初始资料（可选）" FontWeight="SemiBold" />
@@ -131,7 +131,7 @@
                                    Text="同一个保险箱可用不同密码打开两个互相独立的空间。此功能可以减少界面直接暴露，但不能保证在所有取证条件下绝对无法判断隐蔽空间是否存在。"
                                    Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="22,5,0,0" />
                         <Border x:Name="HiddenSpacePanel" Visibility="Collapsed" Background="#F5F8F7"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12"
                                 Padding="12" Margin="0,11,0,0">
                             <StackPanel>
                                 <TextBlock x:Name="HiddenSpaceTitle" Text="秘密密码与空间容量" FontWeight="SemiBold" />
@@ -195,7 +195,7 @@
                                            Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0" />
                             </StackPanel>
                             <Border x:Name="OpenUpgradePanel" Visibility="Collapsed" Background="#F5F8F7"
-                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12"
                                     Padding="12" Margin="0,12,0,0">
                                 <StackPanel>
                                     <TextBlock x:Name="UpgradeCapacityLabel" Text="升级后的固定总容量" FontWeight="SemiBold" />
@@ -242,7 +242,7 @@
                             <Button x:Name="LockButton" Content="锁定并卸载磁盘" Click="Lock_Click" Style="{StaticResource PrimaryButton}" />
                         </WrapPanel>
                         <Border x:Name="HistorySettingsPanel" Visibility="Collapsed" Background="#F5F8F7" BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,14,0,0">
+                                BorderThickness="1" CornerRadius="12" Padding="12" Margin="0,14,0,0">
                             <StackPanel>
                                 <TextBlock x:Name="HistorySettingsTitle" Text="当前保险箱的历史版本设置" FontWeight="SemiBold" />
                                 <TextBlock x:Name="HistorySettingsHint" Text="这些设置只作用于当前保险箱，不会影响其他保险箱。解锁后可以修改。"

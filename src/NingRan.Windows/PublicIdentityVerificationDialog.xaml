@@ -12,11 +12,11 @@
                        Foreground="{StaticResource MutedBrush}"
                        Text="程序不会显示正确答案。请通过电话、当面或其他独立可信方式，向发送者取得安全码。" />
 
-            <Border Background="#FFF7E8" CornerRadius="9" Padding="12,10" Margin="0,0,0,14">
+            <Border Background="#FFF7E8" CornerRadius="12" Padding="12,10" Margin="0,0,0,14">
                 <TextBlock x:Name="TargetAccountText" TextWrapping="Wrap" />
             </Border>
 
-            <Border Background="#EDF7F3" CornerRadius="9" Padding="12,10" Margin="0,0,0,16">
+            <Border Background="#F2F8F5" CornerRadius="12" Padding="12,10" Margin="0,0,0,16">
                 <StackPanel>
                     <TextBlock Text="公开身份名称" FontSize="11" Foreground="{StaticResource MutedBrush}" />
                     <TextBlock x:Name="IdentityNameText" Margin="0,3,0,0" FontWeight="SemiBold" TextWrapping="Wrap" />

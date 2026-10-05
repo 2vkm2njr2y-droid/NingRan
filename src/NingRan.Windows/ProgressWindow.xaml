@@ -5,7 +5,7 @@
         WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
         Background="Transparent" ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner" Closing="Window_Closing">
-    <Border Margin="20" CornerRadius="22" Background="#FCFEFD" BorderBrush="#CFE2DA" BorderThickness="1">
+    <Border Margin="20" CornerRadius="12" Background="#FFFFFF" BorderBrush="#CFE2DA" BorderThickness="1">
         <Border.Effect>
             <DropShadowEffect BlurRadius="28" ShadowDepth="7" Opacity="0.22" Color="#17352C" />
         </Border.Effect>
@@ -23,7 +23,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <Border Width="42" Height="42" CornerRadius="12" Background="#E5F4EE">
+                <Border Width="42" Height="42" CornerRadius="12" Background="#E9F4EF">
                     <Image Source="Assets/AppIcon.png" Width="31" Height="31" Stretch="Uniform" />
                 </Border>
                 <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">

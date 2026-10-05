@@ -416,7 +416,31 @@ internal static class FlexibleArchiveHeader
 
     private static async Task<byte[]> ReadFlexibleHeaderAsync(Stream stream, CancellationToken cancellationToken)
     {
-        stream.Position = 0;
+        return await ReadFlexibleHeaderAsync(stream, cancellationToken, 0).ConfigureAwait(false);
+    }
+
+    internal static async Task<ProtectionFactor> InspectProtectionFactorsAsync(
+        Stream stream,
+        CancellationToken cancellationToken,
+        long archiveOffset = 0)
+    {
+        var bytes = await ReadFlexibleHeaderAsync(stream, cancellationToken, archiveOffset).ConfigureAwait(false);
+        try
+        {
+            return Parse(bytes).Policy.Factors;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static async Task<byte[]> ReadFlexibleHeaderAsync(
+        Stream stream,
+        CancellationToken cancellationToken,
+        long archiveOffset)
+    {
+        stream.Position = archiveOffset;
         var prefix = new byte[12];
         await BinaryFormat.ReadExactlyAsync(stream, prefix, cancellationToken).ConfigureAwait(false);
         if (!prefix.AsSpan(0, 8).SequenceEqual(FlexibleMagic))

@@ -30,7 +30,7 @@
         </WrapPanel>
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="12" /><ColumnDefinition Width="3*" /></Grid.ColumnDefinitions>
-            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="8">
+            <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="8">
                 <TreeView x:Name="FileTree" SelectedItemChanged="FileTree_SelectedItemChanged">
                     <TreeView.Resources>
                         <HierarchicalDataTemplate DataType="{x:Type local:VaultWorkspaceTreeItem}" ItemsSource="{Binding Children}">
@@ -39,7 +39,7 @@
                     </TreeView.Resources>
                 </TreeView>
             </Border>
-            <Border Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12">
+            <Border Grid.Column="2" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="12">
                 <Grid>
                     <TextBlock x:Name="PreviewHint" Text="选择文件后点击“安全查看”。" Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />

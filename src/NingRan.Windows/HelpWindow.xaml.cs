@@ -50,7 +50,7 @@ public partial class HelpWindow : Window
                 var first = group.First();
                 var category = new TreeViewItem
                 {
-                    Header = English ? first.CategoryEn : first.CategoryZh,
+                    Header = CreateHelpTreeHeader(English ? first.CategoryEn : first.CategoryZh, true),
                     IsExpanded = true,
                     FontWeight = FontWeights.SemiBold,
                     Padding = new Thickness(5, 4, 5, 4),
@@ -59,7 +59,7 @@ public partial class HelpWindow : Window
                 {
                     category.Items.Add(new TreeViewItem
                     {
-                        Header = English ? topic.TitleEn : topic.TitleZh,
+                        Header = CreateHelpTreeHeader(English ? topic.TitleEn : topic.TitleZh, false),
                         Tag = topic,
                         FontWeight = FontWeights.Normal,
                         Padding = new Thickness(8, 6, 5, 6),
@@ -76,6 +76,39 @@ public partial class HelpWindow : Window
             : (English ? $"{_visibleTopics.Count} matching guides" : $"找到 {_visibleTopics.Count} 个相关说明");
         var selected = _visibleTopics.FirstOrDefault(topic => topic.Id == oldId) ?? _visibleTopics.FirstOrDefault();
         if (selected is null) RenderEmptySearch(); else SelectTopic(selected);
+    }
+
+    private static FrameworkElement CreateHelpTreeHeader(string text, bool category)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new Border
+        {
+            Width = category ? 26 : 22,
+            Height = category ? 26 : 22,
+            CornerRadius = new CornerRadius(category ? 8 : 7),
+            Background = new System.Windows.Media.SolidColorBrush(category
+                ? System.Windows.Media.Color.FromRgb(221, 240, 232)
+                : System.Windows.Media.Color.FromRgb(240, 244, 246)),
+            Margin = new Thickness(0, 0, 8, 0),
+            Child = new TextBlock
+            {
+                Text = category ? "▰" : "•",
+                Foreground = new System.Windows.Media.SolidColorBrush(category
+                    ? System.Windows.Media.Color.FromRgb(9, 107, 86)
+                    : System.Windows.Media.Color.FromRgb(97, 113, 127)),
+                FontSize = category ? 13 : 14,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+            },
+        });
+        row.Children.Add(new TextBlock
+        {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        return row;
     }
 
     private void HelpTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -321,6 +354,48 @@ public partial class HelpWindow : Window
                 "Compare, restore, or permanently delete versions. Restore writes a new state; permanent deletion cannot be undone. Keep the original until the result is confirmed."),
             S("兼容", "Compatibility", "遇到更高版本格式会停止并提示更新，不会猜测读取。不要用未完成升级文件覆盖唯一备份。",
                 "A newer format stops with an update message; NingRan never guesses. Never overwrite the only backup with an incomplete upgrade.")),
+
+        T("first-run", "start", "开始使用", "Getting started", "第一次使用清单", "First-use checklist",
+            "第一次处理重要资料时，先用一份不重要的副本走完加密、关闭、重新打开和还原。",
+            "For important data, first run the full encrypt, close, reopen, and restore flow with a disposable copy.",
+            S("准备", "Before you begin", "确认磁盘有足够空间，关闭会修改源文件的程序，准备独立保存的密码、密匙和身份备份。不要把唯一原件直接拿来试验。",
+                "Check free space, close programs that may edit the source, and prepare separate storage for passwords, keys, and identity backups. Never experiment with the only original."),
+            S("第一次加密", "First encryption", "选择一个小文件，使用普通密码模式和默认输出位置。加密完成后关闭程序，再从文件管理器选择生成的 .nrenc，输入密码打开并双击查看。",
+                "Choose a small file, use standard password mode and the default destination. Close NingRan, select the .nrenc from Explorer, enter the password, and double-click it to view."),
+            S("第一次还原", "First restore", "在安全查看页面选择普通文件并导出到新文件夹，打开还原文件并核对内容。确认无误后再处理真实资料。",
+                "From the secure view, export a regular file to a new folder, open it, and compare the content. Use real data only after this check.")),
+
+        T("tree-guide", "browse", "查看、修改与导出", "Browse, edit, and export", "文件树操作指南", "File tree guide",
+            "文件树只显示已经通过解锁和验证的内容；未解锁前不会透露包内文件清单。",
+            "The tree shows only content that has been unlocked and verified; the package listing stays hidden before unlock.",
+            S("阅读层级", "Read the hierarchy", "文件夹使用缩进显示层级。点击左侧箭头展开或收起，单击项目查看名称、大小和状态，搜索框可以按名称、扩展名或大小筛选。",
+                "Folders are indented by level. Click the arrow to expand or collapse, select an item to inspect its name, size, and state, and use search to filter by name, extension, or size."),
+            S("安全操作", "Safe actions", "双击图片、文本、音频、视频或 PDF 会按当前播放器设置打开。普通文件使用“导出”选择保存位置。右键菜单中的删除和导出会再次检查当前会话。",
+                "Double-click images, text, audio, video, or PDF to use the selected viewer. Use Export for regular files. Delete and export in the context menu recheck the active session."),
+            S("看不到内容", "If content is missing", "检查搜索框是否有文字、是否位于正确文件夹、交付是否已过期，以及发送方是否禁止导出。不要为了查找内容而反复输入错误密码。",
+                "Check the search text, current folder, delivery expiry, and export restriction. Do not repeatedly enter guesses just to search for content.")),
+
+        T("common-errors", "data", "隐私、清理与排错", "Privacy, cleanup, and troubleshooting", "常见问题和处理方法", "Common problems and fixes",
+            "先看提示中的具体阶段，再决定重试、换位置或保留现场。",
+            "Read the exact stage in the message before retrying, changing the destination, or cleaning up.",
+            S("空间不足", "Not enough space", "先保留原文件和已经完成的加密包，清理自己确认无用的临时输出，再换到空间充足的磁盘。不要删除仍在使用的分片或唯一备份。",
+                "Keep the source and completed package first. Clean only temporary output you have identified, then use a disk with enough space. Do not delete active parts or the only backup."),
+            S("密码或密匙错误", "Wrong password or key", "确认输入法、大小写、密匙文件是否为创建时的原文件。程序不会通过服务器找回密码，也不会把密码写入日志。连续失败后先停止猜测。",
+                "Check keyboard layout, case, and whether the key is the original file. There is no server recovery and passwords are not logged. Stop guessing after repeated failures."),
+            S("文件被占用", "File is in use", "关闭照片、播放器、压缩工具、同步工具和预览窗格后再试。严格防护或外部程序使用临时文件时，不要强行删除，先正常关闭查看会话。",
+                "Close photo viewers, players, archivers, sync tools, and preview panes. When Strict Protection or an external program uses a temporary file, close the session normally instead of forcing deletion."),
+            S("卡在处理中", "Stuck in processing", "大文件压缩、完整验证、保险箱创建和媒体首帧读取可能需要时间。查看磁盘读写和进度；如果取消，等待清理完成后再检查输出是否存在。",
+                "Large compression, full verification, vault creation, and the first media frame can take time. Check disk activity and progress; after cancelling, wait for cleanup and then inspect outputs.")),
+
+        T("security-boundary", "security", "密码与安全保护", "Passwords and security", "安全边界和使用建议", "Security boundaries and advice",
+            "凝然加密保护加密内容和解锁条件，但不能控制已经获得屏幕、内存或管理员权限的外部软件。",
+            "NingRan protects encrypted content and unlock factors, but cannot control software with screen, memory, or administrator access.",
+            S("可以保护什么", "What it protects", "密码、密匙、物理设备和 Windows Hello 参与离线解锁；加密包不会保存原路径，正常查看不会先把全部内容解密到磁盘。",
+                "Passwords, keys, physical devices, and Windows Hello participate in offline unlock. Packages do not store the original path, and normal viewing does not first decrypt the whole package to disk."),
+            S("不能保证什么", "What it cannot guarantee", "截图、拍照、录屏、键盘记录、内存读取、管理员工具、恶意同步和外部程序缓存可能绕过软件能看到的边界。严格防护是发现和清理措施，不是绝对拦截。",
+                "Screenshots, cameras, recording, keyloggers, memory reads, administrator tools, malicious sync, and external caches can exceed the boundary. Strict Protection detects and cleans; it is not absolute blocking."),
+            S("推荐做法", "Recommended practice", "重要资料保留离线备份，密码和密匙分开保存；使用外部程序前先确认是否允许产生临时明文；交付和保险箱使用后立即锁定并检查备份。",
+                "Keep offline backups, store passwords separately from keys, confirm the temporary-plaintext risk before using external programs, and lock delivery and vault sessions immediately after use.")),
 
         T("privacy", "data", "隐私、清理与排错", "Privacy, cleanup, and troubleshooting", "隐私、清理、备份和排错", "Privacy, cleanup, backups, and troubleshooting",
             "本机加密不等于外部程序和 Windows 不会留下副本。",

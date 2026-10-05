@@ -10,8 +10,11 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Media3D;
+using System.Windows.Media.Imaging;
 using Microsoft.Win32;
+using LibVLCSharp.Shared;
 using NingRan.Core;
+using NativeMediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace NingRan.Windows;
 
@@ -56,6 +59,18 @@ public partial class MainWindow : Window
     private MediaViewerFailurePreferences _mediaViewerFailurePreferences = new();
     private MediaPlayerPreferences _mediaPlayerPreferences = new();
     private string _unlockedSearchQuery = string.Empty;
+    private CancellationTokenSource? _thumbnailCancellation;
+    private int _thumbnailGeneration;
+    private readonly SemaphoreSlim _thumbnailGate = new(1, 1);
+    private bool _thumbnailVideoViewReady;
+    private LibVLC? _thumbnailVlc;
+    private NativeMediaPlayer? _thumbnailPlayer;
+    private Media? _thumbnailMedia;
+    private Stream? _thumbnailStream;
+    private TaskCompletionSource<bool>? _thumbnailFrameReady;
+    private bool _associatedExplorerLaunch;
+    private SecureArchiveExplorerWindow? _associatedExplorerWindow;
+    private string? _openedArchiveKeyFilePath;
 
     public MainWindow(bool allowElevatedMediaBrowsing = false)
     {
@@ -202,6 +217,42 @@ public partial class MainWindow : Window
 
     private IdentitySummary? SelectedArchiveSigningIdentity =>
         ArchiveSigningIdentityCombo.SelectedItem as IdentitySummary;
+
+    private void HomeNavigation_Click(object sender, RoutedEventArgs e)
+    {
+        NavigationHost.Visibility = Visibility.Collapsed;
+        VaultNavigationPage.Visibility = Visibility.Collapsed;
+        DeliveryNavigationPage.Visibility = Visibility.Collapsed;
+        MainContent.Visibility = Visibility.Visible;
+    }
+
+    private void VaultNavigation_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
+        MainContent.Visibility = Visibility.Collapsed;
+        NavigationHost.Visibility = Visibility.Visible;
+        VaultNavigationPage.Visibility = Visibility.Visible;
+        DeliveryNavigationPage.Visibility = Visibility.Collapsed;
+    }
+
+    private void DeliveryNavigation_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allowElevatedMediaBrowsing)
+        {
+            ShowHighSecurityViewingOnlyMessage();
+            return;
+        }
+
+        MainContent.Visibility = Visibility.Collapsed;
+        NavigationHost.Visibility = Visibility.Visible;
+        VaultNavigationPage.Visibility = Visibility.Collapsed;
+        DeliveryNavigationPage.Visibility = Visibility.Visible;
+    }
 
     private void HelpButton_Click(object sender, RoutedEventArgs e)
     {
@@ -760,7 +811,10 @@ public partial class MainWindow : Window
 
             if (NrArchiveService.IsSupportedArchiveFile(fullPath))
             {
-                await SetSourceAsync(fullPath);
+                if (IsAssociatedUnlockArchive(fullPath))
+                    await OpenAssociatedArchiveAsync(fullPath);
+                else
+                    await SetSourceAsync(fullPath);
             }
             else if (string.Equals(extension, ".nrid", StringComparison.OrdinalIgnoreCase))
             {
@@ -774,6 +828,206 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             ShowFriendlyError("无法打开关联文件", exception);
+        }
+    }
+
+    private static bool IsAssociatedUnlockArchive(string path) =>
+        string.Equals(Path.GetExtension(path), ".nrenc", StringComparison.OrdinalIgnoreCase) ||
+        NrSplitArchiveService.IsSupportedPartFile(path);
+
+    private async Task OpenAssociatedArchiveAsync(string path)
+    {
+        // 资源管理器双击入口直接走独立解锁窗，不触发主窗口普通选择区的刷新。
+        // 这样主窗口可以保持隐藏，也避免关联启动时访问尚未显示的普通界面控件。
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath) || _isBusy || _allowElevatedMediaBrowsing)
+        {
+            return;
+        }
+
+        if (!await FinalizeDefaultProgramFilesBeforeCloseAsync())
+        {
+            return;
+        }
+
+        CloseArchiveSession();
+        _sourcePath = fullPath;
+
+        ArchiveInfo info;
+        try
+        {
+            info = await _archiveService.InspectAsync(fullPath);
+        }
+        catch (Exception exception)
+        {
+            ShowFriendlyError("无法读取加密文件信息", exception);
+            return;
+        }
+
+        _detectedArchiveMode = info.Mode;
+        _detectedArchiveInfo = info;
+
+        var unlockDialog = new ArchiveUnlockWindow(Path.GetFileName(fullPath), info);
+        if (unlockDialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        DecryptKeyFilePathInput.Text = unlockDialog.KeyFilePath ?? string.Empty;
+
+        using var password = unlockDialog.TakePassword();
+        _associatedExplorerLaunch = true;
+        await OpenArchiveForBrowsingAsync(password, unlockDialog.KeyFilePath, unlockDialog.SelectedMode);
+    }
+
+    internal async Task OpenEntryFromExplorerAsync(SecureArchiveEntry entry)
+    {
+        if (_archiveSession is null || entry.IsDirectory) return;
+        if (_archiveSession.IsExpired)
+        {
+            ShowNoticeForDeliveryRestriction(_archiveSession);
+            return;
+        }
+
+        if (MediaPlayerSelection.ShouldUseDefaultProgram(_mediaPlayerPreferences) && entry.MediaKind is not null)
+        {
+            try
+            {
+                await _defaultProgramOpenTracker.ExportAndOpenAsync(_archiveSession, entry);
+                return;
+            }
+            catch (Exception exception)
+            {
+                ShowFriendlyError("无法使用系统默认程序打开", exception);
+                return;
+            }
+        }
+
+        if (entry.MediaKind is not null)
+        {
+            var parentPath = GetArchiveParentPath(entry.RelativePath) ?? string.Empty;
+            var mediaEntries = _archiveSession.Entries
+                .Where(candidate => !candidate.IsDirectory && candidate.MediaKind is not null &&
+                                    string.Equals(GetArchiveParentPath(candidate.RelativePath) ?? string.Empty, parentPath,
+                                        StringComparison.OrdinalIgnoreCase))
+                .OrderBy(candidate => candidate.Name, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+            if (entry.MediaKind == SecureMediaKind.Pdf)
+            {
+                new SecurePdfViewerWindow(_archiveSession, entry) { Owner = _associatedExplorerWindow }.ShowDialog();
+                return;
+            }
+
+            new SecureMediaViewerWindow(_archiveSession, mediaEntries, entry)
+            {
+                Owner = _associatedExplorerWindow,
+            }.ShowDialog();
+            return;
+        }
+
+        await ExportUnlockedEntryAsync(entry);
+    }
+
+    internal async Task ExportEntryFromExplorerAsync(SecureArchiveEntry entry)
+    {
+        if (_archiveSession is null || _isBusy)
+        {
+            return;
+        }
+
+        var choice = new ExportArchiveWindow(entry.Name) { Owner = _associatedExplorerWindow ?? (Window)this };
+        if (choice.ShowDialog() != true)
+        {
+            return;
+        }
+
+        if (!choice.ExportAsEncryptedPackage)
+        {
+            await ExportUnlockedEntryAsync(entry);
+            return;
+        }
+
+        await ExportOpenedArchivePackageAsync();
+    }
+
+    internal Task AppendFromExplorerAsync(SecureArchiveEntry target)
+    {
+        return AppendFilesToUnlockedAsync(target);
+    }
+
+    internal async Task DeleteFromExplorerAsync(SecureArchiveEntry entry)
+    {
+        await DeleteUnlockedEntriesAsync([entry.RelativePath]);
+    }
+
+    internal Task VerifyFromExplorerAsync()
+    {
+        VerifyUnlockedArchive_Click(this, new RoutedEventArgs());
+        return Task.CompletedTask;
+    }
+
+    internal void ShowSizeFromExplorer() => ArchiveSizeInfo_Click(this, new RoutedEventArgs());
+
+    internal void CloseAssociatedExplorer()
+    {
+        _associatedExplorerWindow = null;
+        CloseArchiveSession();
+        _closingAnimationComplete = true;
+        Close();
+        Application.Current.Shutdown();
+    }
+
+    private async Task ExportOpenedArchivePackageAsync()
+    {
+        if (_archiveSession is null || !_archiveSession.CanExportPlaintext)
+        {
+            if (_archiveSession is not null) ShowNoticeForDeliveryRestriction(_archiveSession);
+            return;
+        }
+
+        var packageDialog = new SaveFileDialog
+        {
+            Title = "导出加密包",
+            Filter = "凝然加密包|*.nrenc",
+            DefaultExt = ".nrenc",
+            AddExtension = true,
+            OverwritePrompt = false,
+            FileName = Path.GetFileNameWithoutExtension(_archiveSession.ArchivePath) + ".nrenc",
+        };
+        if (packageDialog.ShowDialog(_associatedExplorerWindow ?? (Window)this) != true) return;
+
+        _operationCancellation = new CancellationTokenSource();
+        _progressWindow = new ProgressWindow(false, "正在导出加密包") { Owner = _associatedExplorerWindow ?? (Window)this };
+        _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
+        var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
+        try
+        {
+            SetBusy(true);
+            _progressWindow.Show();
+            var result = await _archiveSession.ExportEncryptedArchiveAsync(
+                packageDialog.FileName, progress, _operationCancellation.Token);
+            CloseProgressWindow();
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this,
+                $"加密包已经导出到：\n\n{result}\n\n未创建明文文件。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            CloseProgressWindow();
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "导出已取消，未完成的加密包已经清理。", AppName,
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception exception)
+        {
+            CloseProgressWindow();
+            ShowFriendlyError("无法导出加密包", exception);
+        }
+        finally
+        {
+            CloseProgressWindow();
+            _operationCancellation?.Dispose();
+            _operationCancellation = null;
+            SetBusy(false);
         }
     }
 
@@ -1439,7 +1693,13 @@ public partial class MainWindow : Window
         _operationCancellation?.Cancel();
     }
 
-    private async Task OpenArchiveForBrowsingAsync(SensitivePassword password)
+    private Task OpenArchiveForBrowsingAsync(SensitivePassword password) =>
+        OpenArchiveForBrowsingAsync(password, CurrentKeyFilePath, CurrentMode);
+
+    private async Task OpenArchiveForBrowsingAsync(
+        SensitivePassword password,
+        string? keyFilePath,
+        EncryptionMode expectedMode)
     {
         if (string.IsNullOrWhiteSpace(_sourcePath))
         {
@@ -1448,15 +1708,19 @@ public partial class MainWindow : Window
 
         try
         {
+            _detectedArchiveMode = expectedMode;
+            _openedArchiveKeyFilePath = keyFilePath;
+            DecryptKeyFilePathInput.Text = keyFilePath ?? string.Empty;
             SetBusy(true);
             Mouse.OverrideCursor = Cursors.Wait;
             using var request = new DecryptRequest(
                 _sourcePath,
                 DestinationDirectory: string.Empty,
                 password,
-                CurrentKeyFilePath,
+                keyFilePath,
                 TrustedSenderId: null,
-                OwnerWindowHandle: new WindowInteropHelper(this).Handle);
+                OwnerWindowHandle: new WindowInteropHelper(this).Handle,
+                ExpectedMode: expectedMode);
             var session = await _archiveService.OpenForBrowsingAsync(
                 request,
                 allowElevated: _allowElevatedMediaBrowsing);
@@ -1467,9 +1731,17 @@ public partial class MainWindow : Window
             }
             CloseArchiveSession();
             ShowUnlockedArchiveSession(session);
+            if (_associatedExplorerLaunch)
+            {
+                _associatedExplorerLaunch = false;
+                _associatedExplorerWindow = new SecureArchiveExplorerWindow(session, this);
+                _associatedExplorerWindow.Show();
+                Hide();
+            }
         }
         catch (Exception exception)
         {
+            _associatedExplorerLaunch = false;
             ShowFriendlyError("无法打开安全内容", exception);
         }
         finally
@@ -1568,6 +1840,11 @@ public partial class MainWindow : Window
 
     private void BuildUnlockedFileTree(SecureArchiveSession session)
     {
+        _thumbnailCancellation?.Cancel();
+        _thumbnailCancellation?.Dispose();
+        _thumbnailCancellation = CancellationTokenSource.CreateLinkedTokenSource(session.CancellationToken);
+        var thumbnailToken = _thumbnailCancellation.Token;
+        var thumbnailGeneration = ++_thumbnailGeneration;
         _checkedArchivePaths.Clear();
         UnlockedFileTree.Items.Clear();
         var query = _unlockedSearchQuery.Trim();
@@ -1600,7 +1877,9 @@ public partial class MainWindow : Window
                 Header = CreateUnlockedFileHeader(
                     entry,
                     entry.IsDirectory ? "📁" : GetUnlockedFileIcon(entry),
-                    !string.Equals(entry.RelativePath, session.RootName, StringComparison.OrdinalIgnoreCase)),
+                    !string.Equals(entry.RelativePath, session.RootName, StringComparison.OrdinalIgnoreCase),
+                    thumbnailToken,
+                    thumbnailGeneration),
                 Tag = entry,
             };
             items[entry.RelativePath] = item;
@@ -1633,7 +1912,7 @@ public partial class MainWindow : Window
     {
         if (_isBusy || _archiveSession is null) return;
         _operationCancellation = new CancellationTokenSource();
-        _progressWindow = new ProgressWindow(false, "正在完整检查加密文件") { Owner = this };
+        _progressWindow = new ProgressWindow(false, "正在完整检查加密文件") { Owner = _associatedExplorerWindow ?? (Window)this };
         _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
         try
         {
@@ -1641,7 +1920,7 @@ public partial class MainWindow : Window
             await _archiveSession.ValidateAsync(_operationCancellation.Token);
             CloseProgressWindow();
             OperationLog.Append("完整检查", _archiveSession.ArchivePath, "通过");
-            MessageBox.Show(this, "完整检查已经通过。程序没有导出或保存明文文件。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "完整检查已经通过。程序没有导出或保存明文文件。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (OperationCanceledException)
@@ -1671,12 +1950,18 @@ public partial class MainWindow : Window
         catch (Exception exception) { ShowFriendlyError("无法导出操作记录", exception); }
     }
 
-    private FrameworkElement CreateUnlockedFileHeader(SecureArchiveEntry entry, string icon, bool canDelete)
+    private FrameworkElement CreateUnlockedFileHeader(
+        SecureArchiveEntry entry,
+        string icon,
+        bool canDelete,
+        CancellationToken thumbnailToken,
+        int thumbnailGeneration)
     {
         var header = new Grid { ToolTip = entry.Name };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var deleteCheck = new CheckBox
         {
             Tag = entry.RelativePath,
@@ -1689,9 +1974,24 @@ public partial class MainWindow : Window
         deleteCheck.Checked += ArchiveDeleteCheck_Changed;
         deleteCheck.Unchecked += ArchiveDeleteCheck_Changed;
         header.Children.Add(deleteCheck);
-        var iconText = new TextBlock { Text = icon, Margin = new Thickness(0, 0, 6, 0) };
-        Grid.SetColumn(iconText, 1);
-        header.Children.Add(iconText);
+        var thumb = new Border
+        {
+            Width = 52,
+            Height = 40,
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+            CornerRadius = new CornerRadius(5),
+            Child = new TextBlock
+            {
+                Text = icon,
+                FontSize = 20,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+            },
+        };
+        Grid.SetColumn(thumb, 1);
+        header.Children.Add(thumb);
         var nameText = new TextBlock
         {
             Text = entry.Name,
@@ -1701,7 +2001,182 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(nameText, 2);
         header.Children.Add(nameText);
+        var detailText = new TextBlock
+        {
+            Text = entry.IsDirectory ? "文件夹" : FormatByteSize(entry.Length),
+            Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 4, 0),
+        };
+        Grid.SetColumn(detailText, 3);
+        header.Children.Add(detailText);
+
+        if (!entry.IsDirectory && entry.MediaKind is SecureMediaKind.Image or SecureMediaKind.Video)
+        {
+            _ = LoadArchiveThumbnailAsync(entry, thumb, thumbnailToken, thumbnailGeneration);
+        }
+
         return header;
+    }
+
+    private async Task LoadArchiveThumbnailAsync(
+        SecureArchiveEntry entry,
+        Border thumbnail,
+        CancellationToken cancellationToken,
+        int generation)
+    {
+        try
+        {
+            var session = _archiveSession;
+            if (session is null || generation != _thumbnailGeneration) return;
+            if (entry.MediaKind == SecureMediaKind.Image)
+            {
+                // 图片解码可能触发完整的加密分段读取，不能在主界面线程中同步执行。
+                // 10.3.3 之前没有缩略图，这里是 10.3.4 新增的卡顿入口。
+                var bitmap = await Task.Run(
+                    () => CreateArchiveImageThumbnail(session, entry, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (generation != _thumbnailGeneration) return;
+                    thumbnail.Child = new Image { Source = bitmap, Stretch = Stretch.UniformToFill };
+                });
+                return;
+            }
+
+            await LoadVideoThumbnailAsync(entry, thumbnail, cancellationToken, generation);
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // The type icon is the intentional fallback for malformed/unsupported media.
+        }
+    }
+
+    private static BitmapImage CreateArchiveImageThumbnail(
+        SecureArchiveSession session,
+        SecureArchiveEntry entry,
+        CancellationToken cancellationToken)
+    {
+        using var stream = session.OpenEntryReadStream(entry.RelativePath);
+        cancellationToken.ThrowIfCancellationRequested();
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.DecodePixelWidth = 96;
+        bitmap.StreamSource = stream;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private void ThumbnailVideoHost_Loaded(object sender, RoutedEventArgs e) => _thumbnailVideoViewReady = true;
+
+    private async Task LoadVideoThumbnailAsync(
+        SecureArchiveEntry entry,
+        Border thumbnail,
+        CancellationToken cancellationToken,
+        int generation)
+    {
+        await _thumbnailGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_archiveSession is null || generation != _thumbnailGeneration || !_thumbnailVideoViewReady)
+                return;
+
+            var nativeDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64"));
+            if (!File.Exists(Path.Combine(nativeDirectory, "libvlc.dll")) ||
+                !Directory.Exists(Path.Combine(nativeDirectory, "plugins")))
+                return;
+
+            var snapshotDirectory = Path.Combine(Path.GetTempPath(), "NingRan", "thumbnails");
+            Directory.CreateDirectory(snapshotDirectory);
+            var snapshotPath = Path.Combine(snapshotDirectory, $"{Guid.NewGuid():N}.png");
+            try
+            {
+                var frameReady = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    LibVLCSharp.Shared.Core.Initialize(nativeDirectory);
+                    _thumbnailVlc ??= new LibVLC("--no-video-title-show", "--quiet", "--no-audio");
+                    _thumbnailPlayer ??= new NativeMediaPlayer(_thumbnailVlc);
+                    _thumbnailPlayer.Playing += ThumbnailPlayer_Playing;
+                    _thumbnailPlayer.TimeChanged += ThumbnailPlayer_TimeChanged;
+                    _thumbnailPlayer.EncounteredError += ThumbnailPlayer_EncounteredError;
+                    _thumbnailFrameReady = frameReady;
+                    ThumbnailVideoView.MediaPlayer = _thumbnailPlayer;
+                    _thumbnailStream = _archiveSession.OpenEntryReadStream(entry.RelativePath);
+                    _thumbnailMedia = new Media(_thumbnailVlc, new StreamMediaInput(_thumbnailStream),
+                        ":file-caching=350", ":network-caching=350", ":clock-jitter=0", ":clock-synchro=0");
+                    if (!_thumbnailPlayer.Play(_thumbnailMedia))
+                        frameReady.TrySetResult(false);
+                });
+
+                await Task.WhenAny(frameReady.Task, Task.Delay(TimeSpan.FromSeconds(2), cancellationToken));
+                cancellationToken.ThrowIfCancellationRequested();
+                var captured = await Dispatcher.InvokeAsync(() =>
+                    generation == _thumbnailGeneration && _thumbnailPlayer?.TakeSnapshot(0, snapshotPath, 160, 90) == true);
+                if (!captured || !File.Exists(snapshotPath)) return;
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (generation != _thumbnailGeneration) return;
+                    using var input = File.OpenRead(snapshotPath);
+                    var bitmap = new BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.StreamSource = input;
+                    bitmap.EndInit();
+                    bitmap.Freeze();
+                    thumbnail.Child = new Image { Source = bitmap, Stretch = Stretch.UniformToFill };
+                });
+            }
+            finally
+            {
+                await Dispatcher.InvokeAsync(StopThumbnailPlayerMedia);
+                try { if (File.Exists(snapshotPath)) File.Delete(snapshotPath); } catch { }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+        finally
+        {
+            _thumbnailGate.Release();
+        }
+    }
+
+    private void ThumbnailPlayer_Playing(object? sender, EventArgs e)
+    {
+        _thumbnailFrameReady?.TrySetResult(true);
+    }
+
+    private void ThumbnailPlayer_TimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
+    {
+        if (e.Time >= 0) _thumbnailFrameReady?.TrySetResult(true);
+    }
+
+    private void ThumbnailPlayer_EncounteredError(object? sender, EventArgs e)
+    {
+        _thumbnailFrameReady?.TrySetResult(false);
+    }
+
+    private void StopThumbnailPlayerMedia()
+    {
+        try { _thumbnailPlayer?.Stop(); } catch { }
+        if (_thumbnailPlayer is not null)
+        {
+            _thumbnailPlayer.Playing -= ThumbnailPlayer_Playing;
+            _thumbnailPlayer.TimeChanged -= ThumbnailPlayer_TimeChanged;
+            _thumbnailPlayer.EncounteredError -= ThumbnailPlayer_EncounteredError;
+        }
+        _thumbnailFrameReady = null;
+        ThumbnailVideoView.MediaPlayer = null;
+        _thumbnailMedia?.Dispose();
+        _thumbnailMedia = null;
+        _thumbnailStream?.Dispose();
+        _thumbnailStream = null;
     }
 
     private void ArchiveDeleteCheck_Changed(object sender, RoutedEventArgs e)
@@ -1922,7 +2397,7 @@ public partial class MainWindow : Window
         if (entry.IsDirectory)
         {
             var dialog = new OpenFolderDialog { Title = "选择解密文件夹副本的保存位置", Multiselect = false };
-            if (dialog.ShowDialog(this) != true) return;
+            if (dialog.ShowDialog(_associatedExplorerWindow ?? (Window)this) != true) return;
             destinationDirectory = dialog.FolderName;
         }
         else
@@ -1934,13 +2409,13 @@ public partial class MainWindow : Window
                 OverwritePrompt = false,
                 AddExtension = false,
             };
-            if (dialog.ShowDialog(this) != true) return;
+            if (dialog.ShowDialog(_associatedExplorerWindow ?? (Window)this) != true) return;
             destinationDirectory = Path.GetDirectoryName(dialog.FileName) ?? string.Empty;
             outputName = Path.GetFileName(dialog.FileName);
         }
 
         _operationCancellation = new CancellationTokenSource();
-        _progressWindow = new ProgressWindow(isEncrypting: false) { Owner = this };
+        _progressWindow = new ProgressWindow(isEncrypting: false) { Owner = _associatedExplorerWindow ?? (Window)this };
         _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
         var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
         try
@@ -1954,13 +2429,13 @@ public partial class MainWindow : Window
                 progress,
                 _operationCancellation.Token);
             CloseProgressWindow();
-            MessageBox.Show(this, $"已导出{(entry.IsDirectory ? "明文文件夹" : "明文文件")}：\n\n{result.OutputPath}", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, $"已导出{(entry.IsDirectory ? "明文文件夹" : "明文文件")}：\n\n{result.OutputPath}", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (OperationCanceledException)
         {
             CloseProgressWindow();
-            MessageBox.Show(this, "导出已取消，未完成的临时明文已经清理。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "导出已取消，未完成的临时明文已经清理。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
@@ -2016,8 +2491,15 @@ public partial class MainWindow : Window
         }
         if (_archiveSession.IsReadOnly)
         {
-            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_archiveSession.Mode == EncryptionMode.PhysicalDevice)
+        {
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this,
+                "物理设备保护的加密文件暂不支持安全修改。请导出内容后重新加密，以免改变授权设备。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -2079,6 +2561,14 @@ public partial class MainWindow : Window
 
     private async void AppendFilesToUnlocked_Click(object sender, RoutedEventArgs e)
     {
+        var target = UnlockedFileTree.SelectedItem is TreeViewItem { Tag: SecureArchiveEntry entry }
+            ? entry
+            : null;
+        await AppendFilesToUnlockedAsync(target);
+    }
+
+    private async Task AppendFilesToUnlockedAsync(SecureArchiveEntry? target)
+    {
         if (_allowElevatedMediaBrowsing)
         {
             ShowHighSecurityViewingOnlyMessage();
@@ -2086,14 +2576,20 @@ public partial class MainWindow : Window
         }
         if (_archiveSession?.IsReadOnly == true)
         {
-            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        if (_isBusy || _archiveSession is null ||
-            UnlockedFileTree.SelectedItem is not TreeViewItem { Tag: SecureArchiveEntry { IsDirectory: true } target })
+        if (_archiveSession?.Mode == EncryptionMode.PhysicalDevice)
         {
-            MessageBox.Show(this, "请先在文件树中选中要放入内容的文件夹，再点击“追加文件”。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this,
+                "物理设备保护的加密文件暂不支持安全修改。请导出内容后重新加密，以免改变授权设备。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_isBusy || _archiveSession is null || target is not { IsDirectory: true })
+        {
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "请先在安全查看窗口中选中要放入内容的文件夹，再点击“追加文件”。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -2109,14 +2605,14 @@ public partial class MainWindow : Window
         var sourcePaths = new List<string>();
         if (type == MessageBoxResult.Yes)
         {
-            var dialog = new AppendFilePickerDialog(Path.GetDirectoryName(_sourcePath)) { Owner = this };
+            var dialog = new AppendFilePickerDialog(Path.GetDirectoryName(_sourcePath)) { Owner = _associatedExplorerWindow ?? (Window)this };
             if (dialog.ShowDialog() != true) return;
             sourcePaths.AddRange(dialog.SelectedFiles);
         }
         else
         {
             var dialog = new OpenFolderDialog { Title = "选择要追加的文件夹", Multiselect = false };
-            if (dialog.ShowDialog(this) != true) return;
+            if (dialog.ShowDialog(_associatedExplorerWindow ?? (Window)this) != true) return;
             sourcePaths.Add(dialog.FolderName);
         }
 
@@ -2258,8 +2754,16 @@ public partial class MainWindow : Window
         }
         if (_archiveSession.IsReadOnly)
         {
-            MessageBox.Show(this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "分片安全查看目前只支持查看和打开文件，追加、删除和更新暂不支持。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (_archiveSession.Mode == EncryptionMode.PhysicalDevice)
+        {
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this,
+                "物理设备保护的加密文件暂不支持安全修改。请导出内容后重新加密，以免改变授权设备。",
+                AppName, MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -2268,17 +2772,53 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (SelectedArchiveSigningIdentity is not { } identity)
+        IdentitySummary? identity;
+        SensitivePassword archivePassword;
+        SensitivePassword signingPassword;
+        if (_associatedExplorerWindow is not null)
         {
-            MessageBox.Show(this, "请选择修改后使用的发送者身份。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
+            IReadOnlyList<IdentitySummary> identities;
+            try
+            {
+                identities = _identityService.ListLocalIdentities();
+            }
+            catch (Exception exception)
+            {
+                ShowFriendlyError("无法读取本机发送者身份", exception);
+                return;
+            }
+
+            var dialog = new ArchiveModificationWindow(identities, _detectedArchiveMode, _associatedExplorerWindow);
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            identity = identities.FirstOrDefault(item =>
+                string.Equals(item.Id, dialog.SelectedIdentityId, StringComparison.OrdinalIgnoreCase));
+            archivePassword = dialog.TakeArchivePassword();
+            signingPassword = dialog.TakeIdentityPassword();
+        }
+        else
+        {
+            identity = SelectedArchiveSigningIdentity;
+            archivePassword = ReadPassword(ArchivePasswordInput);
+            signingPassword = ReadPassword(ArchiveSigningIdentityPasswordInput);
+        }
+
+        if (identity is null)
+        {
+            archivePassword.Dispose();
+            signingPassword.Dispose();
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "请选择修改后使用的发送者身份。", AppName, MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        using var archivePassword = ReadPassword(ArchivePasswordInput);
-        using var signingPassword = ReadPassword(ArchiveSigningIdentityPasswordInput);
         if (archivePassword.IsEmpty || signingPassword.IsEmpty)
         {
-            MessageBox.Show(this, "修改前请填写加密文件密码和修改后发送者身份密码。", AppName,
+            archivePassword.Dispose();
+            signingPassword.Dispose();
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "修改前请填写原加密文件密码和身份密码。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -2288,13 +2828,13 @@ public partial class MainWindow : Window
             archivePassword,
             identity.Id,
             signingPassword,
-            CurrentKeyFilePath,
+            _openedArchiveKeyFilePath ?? CurrentKeyFilePath,
             CurrentCompression,
             removals,
             additions,
             new WindowInteropHelper(this).Handle);
         _operationCancellation = new CancellationTokenSource();
-        _progressWindow = new ProgressWindow(isEncrypting: true, operationTitle: "正在更新加密文件") { Owner = this };
+        _progressWindow = new ProgressWindow(isEncrypting: true, operationTitle: "正在更新加密文件") { Owner = _associatedExplorerWindow ?? (Window)this };
         _progressWindow.CancelRequested += ProgressWindow_CancelRequested;
         var progress = new Progress<CryptoProgress>(value => _progressWindow?.UpdateProgress(value));
         try
@@ -2308,6 +2848,7 @@ public partial class MainWindow : Window
             CloseProgressWindow();
             CloseArchiveSession();
             ShowUnlockedArchiveSession(reopenedSession);
+            _associatedExplorerWindow?.ReplaceSession(reopenedSession);
             OperationLog.Append(additions.Count > 0 ? "追加文件" : "删除文件", _sourcePath, "成功",
                 additions.Count > 0 ? $"追加 {additions.Count} 项" : $"删除 {removals.Count} 项");
             ArchiveSigningIdentityPasswordInput.Clear();
@@ -2316,7 +2857,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             CloseProgressWindow();
-            MessageBox.Show(this, "修改已取消，原加密文件没有变动。", AppName,
+            MessageBox.Show(_associatedExplorerWindow ?? (Window)this, "修改已取消，原加密文件没有变动。", AppName,
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
@@ -2333,6 +2874,8 @@ public partial class MainWindow : Window
             CloseProgressWindow();
             _operationCancellation?.Dispose();
             _operationCancellation = null;
+            archivePassword.Dispose();
+            signingPassword.Dispose();
             SetBusy(false);
         }
     }
@@ -2857,6 +3400,10 @@ public partial class MainWindow : Window
 
     private void CloseArchiveSession()
     {
+        _thumbnailCancellation?.Cancel();
+        _thumbnailCancellation?.Dispose();
+        _thumbnailCancellation = null;
+        _thumbnailGeneration++;
         foreach (var viewer in _activeExternalMediaViewers.ToArray())
         {
             _ = viewer.DisposeAsync();
@@ -3078,6 +3625,7 @@ public partial class MainWindow : Window
 
         CloseArchiveSession();
         _sourcePath = selectedPath;
+        _openedArchiveKeyFilePath = null;
         _detectedArchiveMode = EncryptionMode.Standard;
         _detectedArchiveInfo = new ArchiveInfo(EncryptionMode.Standard, false);
         DecryptPhysicalDeviceText.Text = string.Empty;
@@ -3147,7 +3695,7 @@ public partial class MainWindow : Window
     {
         var item = new TreeViewItem
         {
-            Header = info is DirectoryInfo ? $"📁  {info.Name}" : $"📄  {info.Name}",
+            Header = CreateExplorerHeader(info),
             Tag = info.FullName,
         };
 
@@ -3158,6 +3706,45 @@ public partial class MainWindow : Window
         }
 
         return item;
+    }
+
+    private static FrameworkElement CreateExplorerHeader(FileSystemInfo info)
+    {
+        var directory = info is DirectoryInfo;
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        row.Children.Add(new Border
+        {
+            Width = 28,
+            Height = 28,
+            CornerRadius = new CornerRadius(8),
+            Background = new SolidColorBrush(directory
+                ? Color.FromRgb(255, 244, 210)
+                : Color.FromRgb(237, 242, 245)),
+            Margin = new Thickness(0, 0, 9, 0),
+            Child = new TextBlock
+            {
+                Text = directory ? "▰" : "▤",
+                FontSize = 15,
+                Foreground = new SolidColorBrush(directory
+                    ? Color.FromRgb(190, 134, 18)
+                    : Color.FromRgb(83, 105, 119)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+            },
+        });
+        row.Children.Add(new TextBlock
+        {
+            Text = info.Name,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = info.FullName,
+        });
+        return row;
     }
 
     private void DirectoryItem_Expanded(object sender, RoutedEventArgs e)
@@ -3220,6 +3807,8 @@ public partial class MainWindow : Window
                 ? Visibility.Visible : Visibility.Collapsed;
         EncryptFlexiblePanel.Visibility =
             IsEncrypting && FlexibleRadio.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedOptionsExpander.IsExpanded = IsEncrypting &&
+            (AdvancedRadio.IsChecked == true || PhysicalRadio.IsChecked == true || FlexibleRadio.IsChecked == true);
         EncryptIdentityPanel.Visibility =
             IsEncrypting && SignIdentityCheck.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         DecryptKeyPanel.Visibility = !IsEncrypting ? Visibility.Visible : Visibility.Collapsed;
@@ -3786,6 +4375,7 @@ public partial class MainWindow : Window
                 return;
             }
             CloseArchiveSession();
+            DisposeThumbnailPlayer();
             _windowSource?.RemoveHook(WindowMessageHook);
             _strictProtection.AlertRaised -= StrictProtection_AlertRaised;
             _strictProtection.HealthFailed -= StrictProtection_HealthFailed;
@@ -3801,6 +4391,27 @@ public partial class MainWindow : Window
             _progressWindow?.SetCancelling();
             _operationCancellation.Cancel();
         }
+    }
+
+    private void DisposeThumbnailPlayer()
+    {
+        try { _thumbnailPlayer?.Stop(); } catch { }
+        if (_thumbnailPlayer is not null)
+        {
+            _thumbnailPlayer.Playing -= ThumbnailPlayer_Playing;
+            _thumbnailPlayer.TimeChanged -= ThumbnailPlayer_TimeChanged;
+            _thumbnailPlayer.EncounteredError -= ThumbnailPlayer_EncounteredError;
+        }
+        ThumbnailVideoView.MediaPlayer = null;
+        _thumbnailMedia?.Dispose();
+        _thumbnailMedia = null;
+        _thumbnailStream?.Dispose();
+        _thumbnailStream = null;
+        _thumbnailPlayer?.Dispose();
+        _thumbnailPlayer = null;
+        _thumbnailVlc?.Dispose();
+        _thumbnailVlc = null;
+        _thumbnailFrameReady = null;
     }
 
     private async Task PrepareCloseAsync()

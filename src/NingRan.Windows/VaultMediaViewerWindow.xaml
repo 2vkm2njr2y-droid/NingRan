@@ -15,7 +15,7 @@
             <TextBlock x:Name="TitleText" Text="程序内部安全播放" FontSize="20" FontWeight="Bold" />
             <TextBlock x:Name="FileNameText" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
         </StackPanel>
-        <Border Grid.Row="1" Background="#090B0A" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
+        <Border Grid.Row="1" Background="#090B0A" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
             <Grid>
                 <vlc:VideoView x:Name="MediaView" Loaded="MediaView_Loaded" />
                 <TextBlock x:Name="LoadingText" Text="正在从保险箱安全读取媒体…" Foreground="White"

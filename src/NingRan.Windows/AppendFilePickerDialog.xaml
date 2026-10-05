@@ -4,7 +4,7 @@
         Title="选择要追加的文件"
         Width="920" Height="620" MinWidth="720" MinHeight="500"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
-        Background="#F7F9F8" Closing="Window_Closing">
+        Background="#F5F7FA" Closing="Window_Closing">
     <Window.Resources>
         <Style x:Key="ToolbarButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Width" Value="36" />
@@ -19,7 +19,7 @@
             <Setter Property="ToolTipService.ShowDuration" Value="12000" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E8F2EE" />
+                    <Setter Property="Background" Value="#EBF3F1" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -32,7 +32,7 @@
             <Setter Property="BorderThickness" Value="0" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E8F2EE" />
+                    <Setter Property="Background" Value="#EBF3F1" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -63,7 +63,7 @@
             <RowDefinition Height="66" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="White" BorderBrush="#D8E5E0" BorderThickness="0,0,0,1">
+        <Border Grid.Row="0" Background="White" BorderBrush="#DCE4E9" BorderThickness="0,0,0,1">
             <Grid Margin="14,10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -93,7 +93,7 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                   VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="#61766F" />
+                                   VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="#61717F" />
                         <TextBox x:Name="SearchInput" Grid.Column="1" BorderThickness="0" Background="Transparent"
                                  MinHeight="34" Padding="2,5,8,5" TextChanged="SearchInput_TextChanged" />
                         <TextBlock x:Name="SearchPlaceholder" Grid.Column="1" Text="搜索当前文件夹"
@@ -111,10 +111,10 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="#F3F7F5">
+            <Border Grid.Column="0" Background="#F5F7FA">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="10,12">
-                        <TextBlock Text="快速访问" FontSize="11" FontWeight="SemiBold" Foreground="#61766F"
+                        <TextBlock Text="快速访问" FontSize="11" FontWeight="SemiBold" Foreground="#61717F"
                                    Margin="11,0,0,5" />
                         <Button Style="{StaticResource NavigationButton}" Content="⌂  主文件夹" Tag="Home"
                                 Click="QuickLocation_Click" />
@@ -126,13 +126,13 @@
                                 Click="QuickLocation_Click" />
                         <Button Style="{StaticResource NavigationButton}" Content="▧  图片" Tag="Pictures"
                                 Click="QuickLocation_Click" />
-                        <TextBlock Text="此电脑" FontSize="11" FontWeight="SemiBold" Foreground="#61766F"
+                        <TextBlock Text="此电脑" FontSize="11" FontWeight="SemiBold" Foreground="#61717F"
                                    Margin="11,16,0,5" />
                         <StackPanel x:Name="DriveButtons" />
                     </StackPanel>
                 </ScrollViewer>
             </Border>
-            <Border Grid.Column="1" Background="#D8E5E0" />
+            <Border Grid.Column="1" Background="#DCE4E9" />
 
             <Grid Grid.Column="2" Background="White">
                 <Grid.RowDefinitions>
@@ -177,7 +177,7 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="2" Background="White" BorderBrush="#D8E5E0" BorderThickness="0,1,0,0">
+        <Border Grid.Row="2" Background="White" BorderBrush="#DCE4E9" BorderThickness="0,1,0,0">
             <Grid Margin="16,12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -186,7 +186,7 @@
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock x:Name="SelectionSummary" Text="尚未选择文件" FontWeight="SemiBold" />
                     <TextBlock Text="普通单击只选择一项；按住 Shift 单击可增加选择。"
-                               FontSize="11" Foreground="#61766F" Margin="0,2,0,0" />
+                               FontSize="11" Foreground="#61717F" Margin="0,2,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Content="取消" Padding="17,7" Margin="0,0,8,0" IsCancel="True" />

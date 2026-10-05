@@ -131,7 +131,6 @@ public sealed class NrArchiveService
             var splitFileInfo = new FileInfo(fullPath);
             return splitInfo with
             {
-                Mode = EncryptionMode.Standard,
                 HidesExactSize = false,
                 PhysicalDevices = [],
                 FormatVersion = "split-1",
@@ -147,7 +146,6 @@ public sealed class NrArchiveService
         var fileInfo = new FileInfo(fullPath);
         return info with
         {
-            Mode = EncryptionMode.Standard,
             HidesExactSize = false,
             PhysicalDevices = [],
             FormatVersion = isPhotoArchive ? "7.0" : "6.1",
@@ -1016,7 +1014,8 @@ public sealed class NrArchiveService
         {
             WindowsFileSystemSafety.ThrowIfProcessIsElevated();
         }
-        if (request.Password.IsEmpty)
+        // 组合保护格式可以把密码作为可选条件；旧格式仍保持必须输入密码的原有入口规则。
+        if (request.Password.IsEmpty && request.ExpectedMode != EncryptionMode.Flexible)
         {
             throw new NingRanException("请输入密码。");
         }

@@ -206,6 +206,11 @@ internal sealed partial class ArchiveHeader
         if (bytes.AsSpan(0, FlexibleArchiveHeader.FlexibleMagic.Length)
             .SequenceEqual(FlexibleArchiveHeader.FlexibleMagic))
         {
+            if (expectedMode is not null and not EncryptionMode.Flexible)
+            {
+                CryptographicOperations.ZeroMemory(bytes);
+                throw new NingRanException("此文件使用自定义组合保护，请选择对应的解锁方式。");
+            }
             stream.Position = 0;
             try
             {

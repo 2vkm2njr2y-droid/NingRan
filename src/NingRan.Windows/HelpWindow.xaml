@@ -4,6 +4,33 @@
         x:Name="HelpRoot" Title="凝然加密帮助文档" Icon="Assets/AppIcon.ico"
         Width="1260" Height="820" MinWidth="980" MinHeight="620"
         WindowStartupLocation="CenterOwner" Background="{StaticResource PageBrush}">
+    <Window.Resources>
+        <Style x:Key="HelpTreeItemStyle" TargetType="TreeViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Margin" Value="2,1" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Style.Triggers>
+                <Trigger Property="HasItems" Value="True">
+                    <Setter Property="Padding" Value="10,10" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}" />
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#EEF6F3" />
+                    <Setter Property="BorderBrush" Value="#D5E8E0" />
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#DDF0E8" />
+                    <Setter Property="BorderBrush" Value="#9ACDBB" />
+                    <Setter Property="Foreground" Value="#096B56" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
     <Grid Margin="18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -49,6 +76,7 @@
                                    TextWrapping="Wrap" FontSize="11" Margin="0,6,0,0" />
                     </StackPanel>
                     <TreeView x:Name="HelpTree" BorderThickness="0" Background="Transparent"
+                              ItemContainerStyle="{StaticResource HelpTreeItemStyle}"
                               SelectedItemChanged="HelpTree_SelectedItemChanged"
                               ScrollViewer.VerticalScrollBarVisibility="Auto" />
                 </DockPanel>

@@ -5,9 +5,13 @@ namespace NingRan.Windows;
 
 public partial class ExportArchiveWindow : Window
 {
-    public ExportArchiveWindow()
+    public ExportArchiveWindow(string? selectedEntryName = null)
     {
         InitializeComponent();
+        if (!string.IsNullOrWhiteSpace(selectedEntryName))
+        {
+            SubtitleText.Text = $"明文选项导出当前选中的“{selectedEntryName}”；加密包选项导出整个已打开的加密包。";
+        }
         ApplyLanguage();
     }
 

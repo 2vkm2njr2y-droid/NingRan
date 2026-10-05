@@ -76,7 +76,7 @@ public partial class App : Application
             Shutdown(2);
             return;
         }
-        var associatedFile = highSecurityArchivePath ?? applicationArguments.FirstOrDefault(File.Exists);
+        var associatedFile = highSecurityArchivePath ?? FindExistingArgumentPath(applicationArguments);
         if (highSecurityOpen && !HighSecurityLaunch.IsTrustedInstalledComponent(
                 Environment.ProcessPath ?? string.Empty,
                 "NingRan.exe"))
@@ -172,8 +172,15 @@ public partial class App : Application
         await minimumDisplay;
 
         MainWindow = mainWindow;
-        ShutdownMode = ShutdownMode.OnMainWindowClose;
-        mainWindow.Show();
+        var associatedArchiveOpen = associatedFile is not null &&
+            NrArchiveService.IsSupportedArchiveFile(associatedFile) &&
+            (string.Equals(Path.GetExtension(associatedFile), ".nrenc", StringComparison.OrdinalIgnoreCase) ||
+             NrSplitArchiveService.IsSupportedPartFile(associatedFile));
+        ShutdownMode = associatedArchiveOpen ? ShutdownMode.OnLastWindowClose : ShutdownMode.OnMainWindowClose;
+        if (!associatedArchiveOpen)
+        {
+            mainWindow.Show();
+        }
         splash.Close();
 
         if (associatedFile is not null)
@@ -209,6 +216,33 @@ public partial class App : Application
         {
             UiLanguage.Apply(window);
         }
+    }
+
+    private static string? FindExistingArgumentPath(IReadOnlyList<string> arguments)
+    {
+        foreach (var argument in arguments)
+        {
+            if (File.Exists(argument))
+            {
+                return Path.GetFullPath(argument);
+            }
+        }
+
+        // 某些旧的文件关联命令没有给 %1 加引号，带空格的路径会被拆成多个参数。
+        // 只把能够拼成现有文件的参数组合起来，不改变其他启动参数的含义。
+        for (var start = 0; start < arguments.Count; start++)
+        {
+            for (var length = arguments.Count - start; length > 1; length--)
+            {
+                var candidate = string.Join(' ', arguments.Skip(start).Take(length));
+                if (File.Exists(candidate))
+                {
+                    return Path.GetFullPath(candidate);
+                }
+            }
+        }
+
+        return null;
     }
 
     protected override void OnExit(ExitEventArgs e)
